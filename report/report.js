@@ -4511,6 +4511,32 @@ const POINT_VOCAB = {
   oppTurnover: ['Huck turnover', 'Throwing error', 'Receiver error'],
 };
 
+// Where our pull landed: in bounds (a spot on the field), or out of bounds,
+// in one of two ways. Stored on the pull's tag as outOfBounds: true plus
+// oobType 'brick' | 'front'; an older tag may have outOfBounds with no type.
+const PULL_OOB_TYPES = [
+  { value: 'brick', label: 'Out-of-bounds (brick)', export: 'brick' },
+  { value: 'front', label: 'Out-of-bounds (in front of brick)', export: 'in front of brick' },
+];
+const PULL_OOB_UNTYPED = 'Out-of-bounds (type not set)';
+// The pull's landing as one label, or null when it isn't tagged.
+function pullLandingLabel(rec) {
+  if (!rec) return null;
+  if (rec.outOfBounds) {
+    const t = PULL_OOB_TYPES.find(o => o.value === rec.oobType);
+    return t ? t.label : PULL_OOB_UNTYPED;
+  }
+  return (rec.landX != null && rec.landY != null) ? 'In-bounds' : null;
+}
+// The landing filter's choices (tagged pulls only match one of the first
+// three; "any" covers both kinds of out-of-bounds, and older untyped ones).
+const PULL_LANDING_ANY_OOB = 'Out-of-bounds (either)';
+const PULL_LANDING_FILTERS = ['In-bounds'].concat(PULL_OOB_TYPES.map(o => o.label), [PULL_LANDING_ANY_OOB]);
+function pullLandingMatches(rec, filter) {
+  if (filter === PULL_LANDING_ANY_OOB) return !!(rec && rec.outOfBounds);
+  return pullLandingLabel(rec) === filter;
+}
+
 // The defences a team can choose from on Season setup's Set up tab; the team
 // ticks the ones it plays and can add its own. Tagging a defensive possession
 // offers exactly the team's list.
@@ -7053,9 +7079,9 @@ const RAW_DATA_NOTES = [
   'Statto only records this team’s own actions -- a point the opponent won by simply holding their own possession has zero recorded passes for that point, so point and score counts should always come from the points data, never by counting passes.',
   'Player names (not IDs) are the join key across points, passes, blocks, lineup, and boxScore within this export.',
   'roster (top level) lists every player who appears in a box score this season. Each entry carries their mixed-line gender designation -- gender is "WMP" (women-matching player) or "MMP" (men-matching player), with genderCode 1 or 0 respectively (both null if the player has no gender set) -- plus hasPhoto and photoFile, and handedness ("Right" or "Left" -- the hand they throw with, as set by the admin; null if not set). Photos are NOT embedded here — they travel as a separate "player photos" ZIP downloaded from the same Raw Data tab, in which each file is named exactly as photoFile says (e.g. photos/sean_mcsweeney.png). If you were given that ZIP alongside this file, use photoFile to match a face to a name; if you weren’t, ignore it — nothing else depends on it.',
-  'pullEvents (top level, separate from games) is a manually video-tagged list, one entry per defensive point that has been tagged: who pulled and where our pull landed. puller is the player name (or null if untagged). landX/landY are 0-1 field fractions in the same coordinate system as passes (null when outOfBounds is true, or when a spot wasn’t marked); outOfBounds=true means the pull sailed out. It is only present for points a tagger has marked, so it may be empty or cover only some defensive points.',
+  'pullEvents (top level, separate from games) is a manually video-tagged list, one entry per defensive point that has been tagged: who pulled and where our pull landed. puller is the player name (or null if untagged). landX/landY are 0-1 field fractions in the same coordinate system as passes (null when outOfBounds is true, or when a spot wasn’t marked); outOfBounds=true means the pull went out of bounds, and outOfBoundsType says how: "brick" (out of bounds, brought to the brick mark) or "in front of brick" (out of bounds, put into play in front of the brick); null if not recorded (pulls tagged before the two kinds existed). It is only present for points a tagger has marked, so it may be empty or cover only some defensive points.',
   'opponentTurnoverEvents (top level) is the other manually video-tagged list: opponent turnovers that were NOT one of our blocks (those are in games[].points[].blocks). Statto records nothing for them, so each is inferred as an opponent possession we won the disc back from, identified by pointNumber + opponentPossession (their n-th offensive possession that point); type is one of Huck turnover / Throwing error / Receiver error, or null if untagged. Like pullEvents, only tagged ones appear.',
-  'Film tags: a pass or block in games[].points[] may carry a "filmTags" object when someone has video-tagged it. On a pass: hand (backhand/forehand/etc.), release, distance, stall (Low/Mid/High), catch, highlight, turnoverReason (an ARRAY -- a turnover can have several causes), plus timestamp (seconds into that game’s video) and notes. On a block: type, highlight, timestamp, notes. A point may also carry filmTags: defScheme (the defence called), pull (where our pull landed -- puller, landX/landY 0-1 or outOfBounds), defensivePossessions[] (each with defScheme), and opponentTurnovers[] (each with a type). Every field is optional and tags exist only where a tagger added them, so most passes have none. (pullEvents/opponentTurnoverEvents above are flattened, game-context copies of the same point-level tags, handy for "list every tagged pull".)',
+  'Film tags: a pass or block in games[].points[] may carry a "filmTags" object when someone has video-tagged it. On a pass: hand (backhand/forehand/etc.), release, distance, stall (Low/Mid/High), catch, highlight, turnoverReason (an ARRAY -- a turnover can have several causes), plus timestamp (seconds into that game’s video) and notes. On a block: type, highlight, timestamp, notes. A point may also carry filmTags: defScheme (the defence called), pull (where our pull landed -- puller, landX/landY 0-1 or outOfBounds with oobType "brick" or "front"), defensivePossessions[] (each with defScheme), and opponentTurnovers[] (each with a type). Every field is optional and tags exist only where a tagger added them, so most passes have none. (pullEvents/opponentTurnoverEvents above are flattened, game-context copies of the same point-level tags, handy for "list every tagged pull".)',
   'videoLinks (top level) maps each selected game to its YouTube URL. To deep-link a tagged moment, append the tag’s timestamp: `<url>&t=<timestamp>s`.',
   'lines (top level) is the user’s curated line groupings (e.g. "O line", "D line"): each has a name, optional tournament, pointCount, the points it covers (gameIndex + pointNumber), and a roster listing how many of the line’s points each player was on (pctOfLinePoints). Lines are a season-level curation and are deliberately NOT filtered by the selected games.',
   'tournaments (top level) groups the selected games the way the report does -- custom names if the user set them, else auto-detected -- so questions can be scoped to an event ("at Regionals...").',
@@ -7166,6 +7192,7 @@ function collectPullEvents(gameIndices) {
         pointNumber: pt.number,
         puller: rec.puller || null,
         outOfBounds: !!rec.outOfBounds,
+        outOfBoundsType: rec.outOfBounds ? ((PULL_OOB_TYPES.find(o => o.value === rec.oobType) || {}).export || null) : null,
         landX: (!rec.outOfBounds && rec.landX != null) ? rec.landX : null,
         landY: (!rec.outOfBounds && rec.landY != null) ? rec.landY : null,
         notes: rec.notes || null,
@@ -7808,7 +7835,7 @@ function filmEventDescriptor(ev, rec) {
     return { kind: 'Block', main: ev.item.player || '?', tags: filmTagValues(rec, ['type', 'highlight']) };
   }
   if (ev.kind === 'pull') {
-    const landing = rec.outOfBounds ? 'Out-of-bounds' : (rec.landX != null ? 'In-bounds' : null);
+    const landing = pullLandingLabel(rec);
     return { kind: 'Pull', main: rec.puller || 'Pull', tags: landing ? [landing] : [] };
   }
   if (ev.kind === 'def') {
@@ -7864,7 +7891,7 @@ const QUERY_KINDS = {
 // directly answers "what share of turnovers were around backhands".
 function buildAnnotationQueryPane() {
   const pane = el('div', { class: 'de-query' }, []);
-  pane.appendChild(el('p', { class: 'pitch-caption' }, [document.createTextNode('Filter your tagged events — passes, blocks, pulls, defensive possessions or opponent turnovers — across any games. Each result deep-links to the moment in that game’s video. The percentage is the share of every event of that kind in scope, so e.g. Pulls + Landing = Out-of-bounds reads directly as “what fraction of our pulls went out”. “Points” instead lists the start of each offensive or defensive possession a chosen player was on the field for.')]));
+  pane.appendChild(el('p', { class: 'pitch-caption' }, [document.createTextNode('Filter your tagged events — passes, blocks, pulls, defensive possessions or opponent turnovers — across any games. Each result deep-links to the moment in that game’s video. The percentage is the share of every event of that kind in scope, so e.g. Pulls + Landing = Out-of-bounds (either) reads directly as “what fraction of our pulls went out”. “Points” instead lists the start of each offensive or defensive possession a chosen player was on the field for.')]));
 
   let selectedGames = REPORT.games.map((g, i) => i);
   let showKind = 'pass';
@@ -7947,7 +7974,7 @@ function buildAnnotationQueryPane() {
       filterRow.appendChild(dropdown('Block type', BLOCK_VOCAB.type, 'type'));
       filterRow.appendChild(dropdown('Highlight', ANNOTATION_VOCAB.highlight, 'highlight'));
     } else if (showKind === 'pull') {
-      filterRow.appendChild(dropdown('Landing', ['In-bounds', 'Out-of-bounds'], 'landing'));
+      filterRow.appendChild(dropdown('Landing', PULL_LANDING_FILTERS, 'landing'));
       filterRow.appendChild(dropdown('Puller', allPlayerNames(), 'puller'));
     } else if (showKind === 'def') {
       filterRow.appendChild(dropdown('Defensive scheme', defSchemesInUse(), 'defScheme'));
@@ -7983,7 +8010,7 @@ function buildAnnotationQueryPane() {
     if (ev.kind === 'pull') {
       return {
         main: a.puller ? `${a.puller} — pull` : 'Pull',
-        outcome: a.outOfBounds ? 'Out-of-bounds' : (a.landX != null ? 'In-bounds' : ''),
+        outcome: pullLandingLabel(a) || '',
       };
     }
     if (ev.kind === 'def') return { main: `Defensive possession ${ev.defN}`, outcome: '' };
@@ -8080,7 +8107,7 @@ function buildAnnotationQueryPane() {
       if (!filters[k]) return true;
       // Landing isn't a stored string -- it's read off the pull's coordinates.
       if (k === 'landing') {
-        return filters[k] === 'Out-of-bounds' ? !!a.outOfBounds : (!a.outOfBounds && a.landX != null);
+        return pullLandingMatches(a, filters[k]);
       }
       // turnoverReason can hold several values at once -- match if the
       // selected reason is one of them (also accepts an older single-string
@@ -8384,6 +8411,7 @@ function buildDataEditorSection(viewer, tagOnlyGame) {
     setPointField(step.uuid, 'landX', frac.x);
     setPointField(step.uuid, 'landY', frac.y);
     setPointField(step.uuid, 'outOfBounds', undefined);
+    setPointField(step.uuid, 'oobType', undefined);
     render();
   });
   // Draws the recorded pull-landing spot on top of the (dimmed) point routes.
@@ -8590,23 +8618,28 @@ function buildDataEditorSection(viewer, tagOnlyGame) {
         el('div', { class: 'de-panel-sub' }, [document.createTextNode(`Point ${step.pt.number} · Our pull (defensive point)`)]),
       ]));
       const status = rec.outOfBounds
-        ? 'Landed out-of-bounds.'
+        ? (rec.oobType ? 'Landed ' + pullLandingLabel(rec).toLowerCase() + '.' : 'Landed out-of-bounds — choose which kind below.')
         : (rec.landX != null && rec.landY != null)
           ? `Landed at x ${rec.landX}, y ${rec.landY} on the field.`
           : 'Not set yet — click the field to mark where the pull landed.';
       panel.appendChild(el('p', { class: 'pitch-caption de-pull-status' }, [document.createTextNode(status)]));
       const sel = el('select', { class: 'de-select' }, [
         el('option', { value: '' }, [document.createTextNode('In-bounds (click the field)')]),
-        el('option', { value: 'oob' }, [document.createTextNode('Out-of-bounds')]),
-      ]);
-      sel.value = rec.outOfBounds ? 'oob' : '';
+      ].concat(PULL_OOB_TYPES.map(o => el('option', { value: o.value }, [document.createTextNode(o.label)]))));
+      // A pull tagged out-of-bounds before the two kinds existed: show it as
+      // such (not selectable again) until someone picks the kind.
+      const untyped = rec.outOfBounds && !PULL_OOB_TYPES.some(o => o.value === rec.oobType);
+      if (untyped) sel.appendChild(el('option', { value: 'untyped', disabled: true }, [document.createTextNode(PULL_OOB_UNTYPED)]));
+      sel.value = untyped ? 'untyped' : (rec.outOfBounds ? rec.oobType : '');
       sel.addEventListener('change', () => {
-        if (sel.value === 'oob') {
+        if (sel.value) {
           setPointField(annKey, 'outOfBounds', true);
+          setPointField(annKey, 'oobType', sel.value);
           setPointField(annKey, 'landX', undefined);
           setPointField(annKey, 'landY', undefined);
         } else {
           setPointField(annKey, 'outOfBounds', undefined);
+          setPointField(annKey, 'oobType', undefined);
         }
         render();
       });

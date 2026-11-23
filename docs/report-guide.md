@@ -94,7 +94,9 @@ richer, queryable film dataset on top of the raw Statto data.
   everything else, which is far quicker to work through. It's purely a view
   filter — flip between the two freely without losing tags.
 - **Pulls** open every defensive point: record **who pulled**, and click the
-  field to mark **where the pull landed** (or pick Out-of-bounds).
+  field to mark **where the pull landed**, or pick **Out-of-bounds (brick)** or
+  **Out-of-bounds (in front of brick)**. (Pulls tagged plain "Out-of-bounds"
+  before the two kinds existed show as "type not set" until someone picks one.)
 - **Opponent turnovers** that weren't your blocks get their own step (Huck
   turnover / Throwing error / Receiver error). Statto records nothing for
   these, so they're inferred as opponent possessions you won the disc back
@@ -128,7 +130,7 @@ richer, queryable film dataset on top of the raw Statto data.
   outcome and tag fields; block type; pull landing and puller; defensive
   scheme; opponent-turnover type). Results are a clip list where each entry
   **deep-links to that moment in the game's video**. The summary is the share
-  of every event of that kind in scope, so *Pulls + Landing = Out-of-bounds*
+  of every event of that kind in scope, so *Pulls + Landing = Out-of-bounds (either)*
   reads directly as "X of Y pulls (Z%)", and for passes an **Outcome** filter
   re-scopes the denominator so *Outcome = Turnover, Release = Around, Hand =
   Backhand* reads as "X of Y turnovers (Z%)". A **Copy timestamp links**

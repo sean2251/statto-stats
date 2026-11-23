@@ -979,6 +979,61 @@ class BrowserTests(unittest.TestCase):
         ctx.close()
         self.assertEqual(self.errors, [])
 
+    def test_9c_pull_out_of_bounds_kinds(self):
+        """A pull's landing: in bounds, out of bounds at the brick, or out of
+        bounds in front of the brick. Older untyped out-of-bounds tags still show."""
+        api = Api(self.base, "other-club").login("editor", EDITOR_PW)
+        ctx = self.context()
+        page = self.sign_in(ctx, "tagger", "other-club-tagger", "Gale", team="other-club")
+        page.wait_for_selector(".game")
+        page.click(".game >> nth=0 >> .actions a.btn")
+        page.wait_for_selector(".de-tagged-count")
+        # Step to the first pull.
+        for _ in range(60):
+            if page.text_content(".de-panel-title") == "Pull":
+                break
+            page.keyboard.press("ArrowRight")
+        self.assertEqual(page.text_content(".de-panel-title"), "Pull")
+        landing = "label.de-field:has-text('Landing') select"
+        self.assertEqual(page.eval_on_selector_all(landing + " option", "e => e.map(o => o.textContent)"),
+                         ["In-bounds (click the field)", "Out-of-bounds (brick)", "Out-of-bounds (in front of brick)"])
+        page.select_option(landing, "front")
+        page.wait_for_selector(".de-pull-status:has-text('in front of brick')")
+        game_uuid = page.evaluate("() => REPORT.games[TAGONLY_GAME].uuid")
+        key = page.evaluate("() => { const e = StattoStats.gameEvents(REPORT.games[TAGONLY_GAME]).find(e => e.kind === 'pull'); return e.uuid; }")
+
+        def saved():
+            tags = {c["key"]: c["data"] for c in api.call("GET", "/api/tags?since=0")[1]["changes"] if c["kind"] == "points"}
+            return tags.get(key)
+        wait_until(lambda: (saved() or {}).get("oobType") == "front", message="pull landing saved")
+        self.assertTrue(saved()["outOfBounds"])
+        page.select_option(landing, "brick")
+        wait_until(lambda: (saved() or {}).get("oobType") == "brick", message="changed to brick")
+        self.assertEqual(page.evaluate("() => pullLandingLabel(loadAnnotations().points[%s])" % json.dumps(key)), "Out-of-bounds (brick)")
+        self.assertEqual(page.evaluate("() => PULL_LANDING_FILTERS"),
+                         ["In-bounds", "Out-of-bounds (brick)", "Out-of-bounds (in front of brick)", "Out-of-bounds (either)"])
+
+        # A pull tagged plain "Out-of-bounds" before the two kinds existed.
+        api.call("POST", "/api/tags", {"changes": [{"kind": "points", "key": key, "game": game_uuid, "data": {"outOfBounds": True}}]})
+        page.evaluate("() => syncPoll()")
+        wait_until(lambda: page.input_value(landing) == "untyped", message="untyped out-of-bounds shown")
+        self.assertIn("choose which kind", page.text_content(".de-pull-status"))
+        self.assertTrue(page.evaluate("k => pullLandingMatches(loadAnnotations().points[k], 'Out-of-bounds (either)')", key))
+        # Picking a kind fixes it up.
+        page.select_option(landing, "front")
+        wait_until(lambda: (saved() or {}).get("oobType") == "front", message="untyped pull fixed up")
+        ctx.close()
+
+        # The export says which kind.
+        ectx = self.context()
+        ed = self.sign_in(ectx, "editor", EDITOR_PW, go="/editor", team="other-club")
+        self.setup_rows(ed)
+        pulls = ed.evaluate("() => buildRawDataExportJSON(REPORT.games.map((g, i) => i)).pullEvents")
+        mine = [p for p in pulls if p["outOfBounds"]]
+        self.assertEqual([p["outOfBoundsType"] for p in mine], ["in front of brick"])
+        ectx.close()
+        self.assertEqual(self.errors, [])
+
 
 def passes_by_game(statto):
     """{opponent: [{uuid, game}]} for every pass in a .statto export."""
