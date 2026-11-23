@@ -13,6 +13,8 @@
 //   StattoStats.reportFromStatto(arrayBuffer) -> Promise<{ report, teamName }>
 //   StattoStats.gameEvents(game) -> every taggable event of a report game
 //   StattoStats.taggedEvents(game, annotations) -> { tagged, total }
+//   StattoStats.ignoredEventIds(annotations) -> Set of ignored pass/block uuids
+//   (reportFromStatto / computeTeamReport take { ignored } to leave them out)
 (function (root, factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
@@ -635,7 +637,10 @@
     return out;
   }
 
-  function computeTeamReport(relations, teamName) {
+  // opts.ignored: uuids of passes and blocks to leave out entirely (events a
+  // tagger marked "Ignore this event"), as if Statto never recorded them.
+  function computeTeamReport(relations, teamName, opts) {
+    relations = withoutIgnored(relations, opts && opts.ignored);
     const players = get(relations, 'players', []);
     const playersByUuid = new Map(players.map(p => [p.uuid, p]));
     const playerGenders = {};
@@ -729,7 +734,16 @@
   }
 
   // render.build_report: the report for the export's (first) team.
-  async function reportFromStatto(buffer) {
+  function withoutIgnored(relations, ignored) {
+    if (!ignored || !ignored.size) return relations;
+    const keep = list => (Array.isArray(list) ? list : []).filter(x => !ignored.has(get(x, 'uuid', null)));
+    return Object.assign({}, relations, {
+      passes: keep(get(relations, 'passes', [])),
+      defensiveBlocks: keep(get(relations, 'defensiveBlocks', [])),
+    });
+  }
+
+  async function reportFromStatto(buffer, opts) {
     const data = await readStatto(buffer);
     const teams = get(data, 'teams', []);
     if (!teams.length) throw new Error('No teams found in this .statto file.');
@@ -737,7 +751,7 @@
     const teamData = get(team, 'data', {});
     const relations = get(teamData, 'relations', {});
     const teamName = get(get(teamData, 'team', {}), 'name', 'Team');
-    return { report: computeTeamReport(relations, teamName), teamName };
+    return { report: computeTeamReport(relations, teamName, opts), teamName };
   }
 
 
@@ -843,12 +857,27 @@
   // How much of a game is tagged: every taggable event counts, and an event is
   // tagged once it has at least one field set -- the same rule as the tagging
   // page's "events tagged" (in its "All events" view).
+  // Ignored events ("Ignore this event") count as neither.
   function taggedEvents(game, ann) {
-    const events = gameEvents(game);
-    let tagged = 0;
-    events.forEach(ev => { const rec = eventRecord(ann || {}, ev); if (rec && Object.keys(rec).length) tagged++; });
-    return { tagged, total: events.length };
+    let tagged = 0, total = 0;
+    gameEvents(game).forEach(ev => {
+      const rec = eventRecord(ann || {}, ev);
+      if (rec && rec.ignored) return;
+      total++;
+      if (rec && Object.keys(rec).length) tagged++;
+    });
+    return { tagged, total };
+  }
+  // The passes and blocks marked "Ignore this event" in an annotation store:
+  // pass them to computeTeamReport / reportFromStatto as opts.ignored.
+  function ignoredEventIds(ann) {
+    const out = new Set();
+    for (const kind of ['passes', 'blocks']) {
+      const store = (ann && ann[kind]) || {};
+      Object.keys(store).forEach(k => { if (store[k] && store[k].ignored) out.add(k); });
+    }
+    return out;
   }
 
-  return { computeTeamReport, readStatto, reportFromStatto, fmtDisplayDate, pyRound, pointEvents, gameEvents, eventRecord, taggedEvents, _unzip: unzip };
+  return { computeTeamReport, readStatto, reportFromStatto, fmtDisplayDate, pyRound, pointEvents, gameEvents, eventRecord, taggedEvents, ignoredEventIds, _unzip: unzip };
 });

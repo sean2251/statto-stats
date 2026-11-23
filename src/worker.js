@@ -626,9 +626,10 @@ async function putTags(env, team, session, changes, quiet) {
 }
 
 // A tagged event: any kind (passes, blocks, and point-level events -- pulls,
-// defensive possessions, opponent turnovers) with at least one field set. The
+// defensive possessions, opponent turnovers) with at least one field set, and
+// not marked "Ignore this event". The
 // same rule as the pages' counts (StattoStats.taggedEvents).
-const TAGGED = "data IS NOT NULL AND data <> '{}'";
+const TAGGED = "data IS NOT NULL AND data <> '{}' AND data NOT LIKE '%\"ignored\":true%'";
 
 // ---------- the tagging hub ----------
 async function hub(env, team) {

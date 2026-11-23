@@ -4671,7 +4671,9 @@ function buildDistributableHtml(opts) {
   // Seeded under the plain (un-suffixed) key names the published page reads --
   // in the local app this editor's own keys carry a per-season suffix.
   [setupStorageKey(), linesStorageKey(), annotationsStorageKey()].forEach(k => {
-    const v = localStorage.getItem(k);
+    let v = localStorage.getItem(k);
+    // A Team Report carries no trace of events marked "Ignore this event".
+    if (v !== null && opts.viewer && k === annotationsStorageKey()) v = JSON.stringify(withoutIgnoredTags(JSON.parse(v)));
     if (v !== null) seed[canonicalStorageKey(k)] = v;
   });
   // A Team Report always takes its own setup and tags over anything an older
@@ -4696,6 +4698,11 @@ function buildDistributableHtml(opts) {
   // Override the browser tab title so otherwise-identical builds (e.g. a
   // per-opponent tagging page) don't all read the same. The parent report's
   // title is baked into the pristine HTML, so rewrite the whole <title> tag.
+  // The report data itself, when the caller rebuilt it (ignored events left out).
+  if (opts.report) {
+    const data = JSON.stringify(opts.report).replace(/</g, '\\u003c');
+    html = html.replace(/(<script id="report-data" type="application\/json">)[\s\S]*?(<\/script>)/, (m, a, b) => a + data + b);
+  }
   if (opts.title) {
     const safe = String(opts.title).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     html = html.replace(/<title>[\s\S]*?<\/title>/i, '<title>' + safe + '<\/title>');
@@ -4709,30 +4716,59 @@ function buildDistributableHtml(opts) {
 // The published Team Report: read-only, all analysis, Set up hidden, Data
 // Editor reduced to a read-only "Film Clips" browser. Stamped with the publish
 // time and given its own tab title.
+// Promise of the HTML.
 function teamReportHtml() {
-  return buildDistributableHtml({
+  return publishedReport().then(report => buildDistributableHtml({
     viewer: true,
     publishedAt: new Date().toISOString(),
     title: REPORT.teamName + ' — Team Report',
+    report,
+  }));
+}
+// The report as published: passes and blocks marked "Ignore this event" are
+// left out of every stat -- rebuilt from the season's Statto export without
+// them, so completion rates, the leaderboard, lines and so on all recount.
+function publishedReport() {
+  const ignored = StattoStats.ignoredEventIds(loadAnnotations());
+  if (!ignored.size || !SITE) return Promise.resolve(REPORT);
+  return fetch(SITE_BASE + '/api/statto', { cache: 'no-store' })
+    .then(r => { if (!r.ok) throw new Error('Couldn’t load the Statto export (' + r.status + ').'); return r.arrayBuffer(); })
+    .then(buf => StattoStats.reportFromStatto(buf, { ignored }))
+    .then(x => x.report);
+}
+// An annotation store without the records marked "Ignore this event".
+function withoutIgnoredTags(ann) {
+  const out = {};
+  Object.keys(ann || {}).forEach(k => {
+    const store = ann[k];
+    if (!store || typeof store !== 'object' || Array.isArray(store) || !['passes', 'blocks', 'points'].includes(k)) { out[k] = store; return; }
+    out[k] = {};
+    Object.keys(store).forEach(key => { if (!(store[key] && store[key].ignored)) out[k][key] = store[key]; });
   });
+  return out;
 }
 function publishForTeam() {
   if (SITE) { sitePublishReport(); return; }
-  downloadFile(teamReportHtml(), slug(REPORT.teamName) + '_team_report.html', 'text/html;charset=utf-8;');
+  teamReportHtml().then(html => downloadFile(html, slug(REPORT.teamName) + '_team_report.html', 'text/html;charset=utf-8;'));
 }
 // Preview opens the same read-only Team Report in a new tab, interactive, so the
 // editor can check it before publishing. (Blob URL inherits this page's origin,
 // so it shares localStorage -- fine, it's the same data, and the viewer never
 // writes anything.)
 function previewTeamReport() {
-  try {
-    const url = URL.createObjectURL(new Blob([teamReportHtml()], { type: 'text/html' }));
-    const win = window.open(url, '_blank');
-    if (!win) { alert('Your browser blocked the preview tab — allow pop-ups for this page, or use Publish and open the file.'); }
+  // Open the tab now (a click may open one; a later promise may not), then
+  // point it at the report once it's built.
+  const win = window.open('', '_blank');
+  if (!win) { alert('Your browser blocked the preview tab — allow pop-ups for this page, or use Publish and open the file.'); return; }
+  try { win.document.write('<p style="font-family:sans-serif;padding:24px">Building the Team Report…</p>'); } catch (e) {}
+  teamReportHtml().then(html => {
+    const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
+    win.location.href = url;
     setTimeout(() => URL.revokeObjectURL(url), 60000);
-  } catch (e) {
-    alert('Couldn’t open a preview here — use Publish Team Report instead.');
-  }
+  }).catch(err => {
+    win.close();
+    alert('Couldn’t open a preview here (' + err.message + ') — use Publish Team Report instead.');
+  });
 }
 
 // ---------- Season setup: saving to the site ----------
@@ -5068,8 +5104,8 @@ function syncShowStatus() {
 // Publishing on a team site: the Team Report goes to the server, and the team
 // opens it at <team address>/view.
 function sitePublishReport() {
-  const html = teamReportHtml();
-  fetch(SITE_BASE + '/api/report', { method: 'PUT', headers: { 'Content-Type': 'text/plain; charset=utf-8' }, body: html })
+  teamReportHtml()
+    .then(html => fetch(SITE_BASE + '/api/report', { method: 'PUT', headers: { 'Content-Type': 'text/plain; charset=utf-8' }, body: html }))
     .then(r => r.json().catch(() => ({})).then(j => { if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status)); return j; }))
     .then(() => {
       const link = location.origin + SITE_BASE + '/view';
@@ -7788,10 +7824,11 @@ function buildRawDataSection() {
 function buildPointEvents(pt) { return StattoStats.pointEvents(pt); }
 
 // The stored annotation record for an event, whichever store it lives in.
+// An event marked "Ignore this event" has no record here, so film rows and
+// queries leave it out.
 function annotationRecordFor(ann, ev) {
-  if (ev.kind === 'pass') return ann.passes[ev.uuid];
-  if (ev.kind === 'block') return ann.blocks[ev.uuid];
-  return (ann.points || {})[ev.uuid];  // pull / def / oppTurn
+  const rec = ev.kind === 'pass' ? ann.passes[ev.uuid] : ev.kind === 'block' ? ann.blocks[ev.uuid] : (ann.points || {})[ev.uuid];  // pull / def / oppTurn
+  return rec && rec.ignored ? undefined : rec;
 }
 
 // ---------- Film tags on a game's point diagram ----------
@@ -8608,7 +8645,54 @@ function buildDataEditorSection(viewer, tagOnlyGame) {
     ]));
   }
 
+  // ---- "Ignore this event": for passes Statto needed only to make a point
+  // add up, or that are plain wrong. An ignored event is left out of every
+  // stat, count, export and the Team Report (once published again); its tags
+  // are kept in case someone changes their mind. Stored as ignored: true on
+  // the event's tag. Not on the Team Report's read-only Film Clips.
+  function stepIgnored(step) { const rec = stepRecord(step); return !!(rec && rec.ignored); }
+  function setStepIgnored(step, on) {
+    if (step.kind === 'pass' || step.kind === 'block') setField('ignored', on ? true : undefined);
+    else setPointField(step.uuid, 'ignored', on ? true : undefined);
+    render();
+  }
+  function stepTitle(step) {
+    if (step.kind === 'pass') return `${step.item.thrower || '?'} → ${step.item.receiver || '?'}`;
+    if (step.kind === 'block') return `${step.item.player || '?'} — block`;
+    if (step.kind === 'pull') return 'Pull';
+    if (step.kind === 'def') return 'Defensive possession ' + step.defN;
+    return 'Opponent turnover';
+  }
+  // What else leaves the stats with this event.
+  function ignoreConsequence(step) {
+    if (step.kind === 'pass' && step.item.assist) return 'This pass is the assist: ignoring it also takes the assist and the goal out of the stats.';
+    if (step.kind === 'pass' && step.item.turnover) return 'This pass is a turnover: ignoring it also takes that turnover out of the stats.';
+    if (step.kind === 'block') return 'Ignoring a block takes it out of the blocks stats.';
+    return '';
+  }
   function renderPanel() {
+    const step = steps[stepIdx];
+    if (step && !viewer && stepIgnored(step)) {
+      panel.innerHTML = '';
+      panel.appendChild(el('div', { class: 'de-panel-head' }, [
+        el('div', { class: 'de-panel-title' }, [document.createTextNode(stepTitle(step))]),
+        el('div', { class: 'de-panel-sub' }, [document.createTextNode(`Point ${step.pt.number} · Ignored`)]),
+      ]));
+      panel.appendChild(el('p', { class: 'de-ignored-note' }, [document.createTextNode('Ignored: left out of every stat, count and export, and out of the Team Report once it’s published again. Its tags are kept in case you change your mind.')]));
+      const undo = el('button', { class: 'pill-btn', type: 'button' }, [document.createTextNode('Stop ignoring this event')]);
+      undo.addEventListener('click', () => setStepIgnored(step, false));
+      panel.appendChild(el('div', { class: 'controls-row de-ignore-row' }, [undo]));
+      return;
+    }
+    renderPanelBody();
+    if (step && !viewer) {
+      const btn = el('button', { class: 'pill-btn de-ignore-btn', type: 'button', title: 'Leave this event out of every stat — e.g. a pass Statto needed only to make the point add up' }, [document.createTextNode('Ignore this event')]);
+      btn.addEventListener('click', () => setStepIgnored(step, true));
+      const why = ignoreConsequence(step);
+      panel.appendChild(el('div', { class: 'controls-row de-ignore-row' }, [btn].concat(why ? [el('span', { class: 'de-field-note' }, [document.createTextNode(why)])] : [])));
+    }
+  }
+  function renderPanelBody() {
     panel.innerHTML = '';
     const step = steps[stepIdx];
     if (!step) { panel.appendChild(el('p', { class: 'pitch-caption' }, [document.createTextNode('No passes recorded for this game.')])); return; }
@@ -8748,10 +8832,16 @@ function buildDataEditorSection(viewer, tagOnlyGame) {
   const taggedCount = el('span', { class: 'de-tagged-count' }, []);
   // Counts the events currently in view, so it re-scopes with the events
   // filter -- "12 of 40" while skipping throws, not 12 of every pass in the game.
+  // Ignored events count as neither tagged nor not (StattoStats.taggedEvents).
   function updateTaggedCount() {
-    let n = 0;
-    steps.forEach(st => { const rec = stepRecord(st); if (rec && Object.keys(rec).length) n++; });
-    taggedCount.textContent = `${n} of ${steps.length} events tagged in this view`;
+    let n = 0, total = 0, ignored = 0;
+    steps.forEach(st => {
+      const rec = stepRecord(st);
+      if (rec && rec.ignored) { ignored++; return; }
+      total++;
+      if (rec && Object.keys(rec).length) n++;
+    });
+    taggedCount.textContent = `${n} of ${total} events tagged in this view` + (ignored ? ` (${ignored} ignored)` : '');
   }
 
   function render() {
@@ -9033,7 +9123,7 @@ function playerFilmThrows(name, limit) {
     (g.points || []).forEach(pt => (pt.passes || []).forEach(p => {
       if (p.thrower !== name || !p.uuid) return;
       const rec = ann.passes[p.uuid];
-      if (!rec || rec.timestamp == null || !isFinite(Number(rec.timestamp))) return;
+      if (!rec || rec.ignored || rec.timestamp == null || !isFinite(Number(rec.timestamp))) return;
       out.push({ game: g, vid, ts: Math.max(0, Math.floor(Number(rec.timestamp))), hand: rec.hand || null });
     }));
   });

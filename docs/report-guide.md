@@ -123,6 +123,13 @@ richer, queryable film dataset on top of the raw Statto data.
   embeds the YouTube player — scrub to the moment and click **Grab current
   time**, or **Jump** back to a saved time. No link, or prefer to type it?
   Enter a timestamp as `mm:ss` manually.
+- **Ignore this event**, at the bottom of every event's tag panel, leaves an
+  event out of everything: every stat (completion rates, the leaderboard,
+  lines, …), tag counts, exports and the published Team Report. Use it for
+  passes that are wrong or only there to make a Statto point add up. Ignoring
+  an assist also drops the assist and goal; ignoring a turnover drops that
+  turnover. **Stop ignoring this event** brings it back. Publish again for the
+  Team Report to catch up.
 - Tags save to the site event by event, so you see helpers' tags arrive as
   they work (and they see yours). They ride along when you **Publish the Team Report**, and have their own **Export / Import annotations JSON** (e.g. to bring
   in tags from an old helper's file). They key to Statto's stable pass IDs, so

@@ -1615,6 +1615,11 @@
   .de-field-wide { margin-top: 12px; }
   .de-field-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--chalk-dim); }
   .de-field-note { margin: 6px 0 0; font-size: 11px; line-height: 1.45; color: var(--chalk-dim); opacity: 0.8; }
+  /* "Ignore this event", at the foot of every event's tag panel */
+  .de-ignore-row { margin-top: 16px; padding-top: 12px; border-top: 1px solid rgba(var(--chalk-rgb),0.12); gap: 10px; align-items: center; }
+  .de-ignore-row .pill-btn { margin-top: 0; }
+  .de-ignore-row .de-field-note { margin: 0; flex: 1; min-width: 160px; }
+  .de-ignored-note { font-size: 13px; line-height: 1.5; color: var(--chalk); padding: 10px 12px; border-radius: 8px; border: 1px dashed rgba(var(--chalk-rgb),0.35); margin: 10px 0 0; }
   .de-select, .de-ts-input, .de-notes {
     background: var(--ink); color: var(--chalk);
     border: 1px solid rgba(var(--chalk-rgb),0.22); border-radius: 8px;
