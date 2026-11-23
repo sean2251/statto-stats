@@ -979,61 +979,67 @@ class BrowserTests(unittest.TestCase):
         ctx.close()
         self.assertEqual(self.errors, [])
 
-    def test_9c_pull_out_of_bounds_kinds(self):
-        """A pull's landing: in bounds, out of bounds at the brick, or out of
-        bounds in front of the brick. Older untyped out-of-bounds tags still show."""
+    def test_9c_pull_out_of_bounds_tap_in(self):
+        """An out-of-bounds pull stays tagged out of bounds, and a click on the
+        field marks where it was tapped in, snapped to the middle of the field."""
         api = Api(self.base, "other-club").login("editor", EDITOR_PW)
         ctx = self.context()
         page = self.sign_in(ctx, "tagger", "other-club-tagger", "Gale", team="other-club")
         page.wait_for_selector(".game")
         page.click(".game >> nth=0 >> .actions a.btn")
         page.wait_for_selector(".de-tagged-count")
-        # Step to the first pull.
-        for _ in range(60):
+        for _ in range(60):  # step to the first pull
             if page.text_content(".de-panel-title") == "Pull":
                 break
             page.keyboard.press("ArrowRight")
         self.assertEqual(page.text_content(".de-panel-title"), "Pull")
         landing = "label.de-field:has-text('Landing') select"
         self.assertEqual(page.eval_on_selector_all(landing + " option", "e => e.map(o => o.textContent)"),
-                         ["In-bounds (click the field)", "Out-of-bounds (brick)", "Out-of-bounds (in front of brick)"])
-        page.select_option(landing, "front")
-        page.wait_for_selector(".de-pull-status:has-text('in front of brick')")
-        game_uuid = page.evaluate("() => REPORT.games[TAGONLY_GAME].uuid")
-        key = page.evaluate("() => { const e = StattoStats.gameEvents(REPORT.games[TAGONLY_GAME]).find(e => e.kind === 'pull'); return e.uuid; }")
+                         ["In-bounds (click the field)", "Out-of-bounds (click the field where disc tapped in)"])
+        key = page.evaluate("() => StattoStats.gameEvents(REPORT.games[TAGONLY_GAME]).find(e => e.kind === 'pull').uuid")
 
         def saved():
             tags = {c["key"]: c["data"] for c in api.call("GET", "/api/tags?since=0")[1]["changes"] if c["kind"] == "points"}
-            return tags.get(key)
-        wait_until(lambda: (saved() or {}).get("oobType") == "front", message="pull landing saved")
-        self.assertTrue(saved()["outOfBounds"])
-        page.select_option(landing, "brick")
-        wait_until(lambda: (saved() or {}).get("oobType") == "brick", message="changed to brick")
-        self.assertEqual(page.evaluate("() => pullLandingLabel(loadAnnotations().points[%s])" % json.dumps(key)), "Out-of-bounds (brick)")
-        self.assertEqual(page.evaluate("() => PULL_LANDING_FILTERS"),
-                         ["In-bounds", "Out-of-bounds (brick)", "Out-of-bounds (in front of brick)", "Out-of-bounds (either)"])
+            return tags.get(key) or {}
 
-        # A pull tagged plain "Out-of-bounds" before the two kinds existed.
-        api.call("POST", "/api/tags", {"changes": [{"kind": "points", "key": key, "game": game_uuid, "data": {"outOfBounds": True}}]})
-        page.evaluate("() => syncPoll()")
-        wait_until(lambda: page.input_value(landing) == "untyped", message="untyped out-of-bounds shown")
-        self.assertIn("choose which kind", page.text_content(".de-pull-status"))
-        self.assertTrue(page.evaluate("k => pullLandingMatches(loadAnnotations().points[k], 'Out-of-bounds (either)')", key))
-        # Picking a kind fixes it up.
-        page.select_option(landing, "front")
-        wait_until(lambda: (saved() or {}).get("oobType") == "front", message="untyped pull fixed up")
-        ctx.close()
+        def click_field(fx, fy):
+            box = page.locator(".de-pitch svg").bounding_box()
+            page.click(".de-pitch svg", position={"x": box["width"] * fx, "y": box["height"] * fy})
 
-        # The export says which kind.
+        # In bounds: the click is where it landed.
+        click_field(0.2, 0.3)
+        wait_until(lambda: saved().get("landX") is not None, message="landing saved")
+        self.assertAlmostEqual(saved()["landX"], 0.2, delta=0.03)
+        self.assertNotIn("outOfBounds", saved())
+
+        # Out of bounds: the click is the tap-in spot, snapped to the middle.
+        page.select_option(landing, "oob")
+        page.wait_for_selector(".de-pull-status:has-text('click the field where the disc was tapped in')")
+        click_field(0.1, 0.4)
+        wait_until(lambda: saved().get("tapInY") is not None, message="tap-in saved")
+        rec = saved()
+        self.assertTrue(rec["outOfBounds"])
+        self.assertEqual(rec["tapInX"], 0.5)
+        self.assertAlmostEqual(rec["tapInY"], 0.4, delta=0.03)
+        self.assertNotIn("landX", rec, "an out-of-bounds pull has no landing spot")
+        page.wait_for_selector(".de-pull-status:has-text('tapped in at y')")
+        self.assertEqual(page.locator(".de-pitch svg circle[stroke-dasharray]").count(), 1, "the tap-in marker")
+
+        # The export marks it out of bounds with its tap-in spot.
         ectx = self.context()
         ed = self.sign_in(ectx, "editor", EDITOR_PW, go="/editor", team="other-club")
         self.setup_rows(ed)
-        pulls = ed.evaluate("() => buildRawDataExportJSON(REPORT.games.map((g, i) => i)).pullEvents")
-        mine = [p for p in pulls if p["outOfBounds"]]
-        self.assertEqual([p["outOfBoundsType"] for p in mine], ["in front of brick"])
+        pulls = [p for p in ed.evaluate("() => buildRawDataExportJSON(REPORT.games.map((g, i) => i)).pullEvents") if p["outOfBounds"]]
+        self.assertEqual(len(pulls), 1)
+        self.assertEqual((pulls[0]["tapInX"], pulls[0]["landX"]), (0.5, None))
+        self.assertAlmostEqual(pulls[0]["tapInY"], rec["tapInY"])
         ectx.close()
-        self.assertEqual(self.errors, [])
 
+        # Back to in bounds: the tap-in spot goes.
+        page.select_option(landing, "")
+        wait_until(lambda: "tapInY" not in saved() and not saved().get("outOfBounds"), message="back to in bounds")
+        ctx.close()
+        self.assertEqual(self.errors, [])
 
 def passes_by_game(statto):
     """{opponent: [{uuid, game}]} for every pass in a .statto export."""
