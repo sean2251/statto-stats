@@ -127,6 +127,11 @@ richer, queryable film dataset on top of the raw Statto data.
   we called (click again to clear). It shows with the pass's tags, can be
   filtered on in Query (Out of timeout: Yes / No), and is in the export as
   `filmTags.outOfTimeout`.
+- **Edit**, on a pass or block, corrects the thrower and/or receiver, or who
+  got the D, when Statto has it wrong. The panel shows the corrected names
+  (and what Statto had); the published Team Report is rebuilt with the
+  correction, so every stat credits the right player. Who pulled is the
+  pull's own Puller field.
 - **Ignore this event**, at the bottom of every event's tag panel, leaves an
   event out of everything: every stat (completion rates, the leaderboard,
   lines, …), tag counts, exports and the published Team Report. Use it for

@@ -4728,12 +4728,15 @@ function teamReportHtml() {
 // The report as published: passes and blocks marked "Ignore this event" are
 // left out of every stat -- rebuilt from the season's Statto export without
 // them, so completion rates, the leaderboard, lines and so on all recount.
+// "Edit" corrections (thrower, receiver, who got the D) are applied the same way.
 function publishedReport() {
-  const ignored = StattoStats.ignoredEventIds(loadAnnotations());
-  if (!ignored.size || !SITE) return Promise.resolve(REPORT);
+  const ann = loadAnnotations();
+  const ignored = StattoStats.ignoredEventIds(ann);
+  const edits = StattoStats.eventEdits(ann);
+  if ((!ignored.size && !edits) || !SITE) return Promise.resolve(REPORT);
   return fetch(SITE_BASE + '/api/statto', { cache: 'no-store' })
     .then(r => { if (!r.ok) throw new Error('Couldn’t load the Statto export (' + r.status + ').'); return r.arrayBuffer(); })
-    .then(buf => StattoStats.reportFromStatto(buf, { ignored }))
+    .then(buf => StattoStats.reportFromStatto(buf, { ignored, edits }))
     .then(x => x.report);
 }
 // An annotation store without the records marked "Ignore this event".
@@ -8664,8 +8667,8 @@ function buildDataEditorSection(viewer, tagOnlyGame) {
     render();
   }
   function stepTitle(step) {
-    if (step.kind === 'pass') return `${step.item.thrower || '?'} → ${step.item.receiver || '?'}`;
-    if (step.kind === 'block') return `${step.item.player || '?'} — block`;
+    if (step.kind === 'pass') return `${effectiveName(step, 'thrower') || '?'} → ${effectiveName(step, 'receiver') || '?'}`;
+    if (step.kind === 'block') return `${effectiveName(step, 'player') || '?'} — block`;
     if (step.kind === 'pull') return 'Pull';
     if (step.kind === 'def') return 'Defensive possession ' + step.defN;
     return 'Opponent turnover';
@@ -8707,6 +8710,63 @@ function buildDataEditorSection(viewer, tagOnlyGame) {
       const why = ignoreConsequence(step);
       panel.appendChild(el('div', { class: 'controls-row de-ignore-row' }, [btn].concat(why ? [el('span', { class: 'de-field-note' }, [document.createTextNode(why)])] : [])));
     }
+    if (step && !viewer && (step.kind === 'pass' || step.kind === 'block')) panel.appendChild(buildEditSection(step));
+  }
+
+  // ---- "Edit": correct who threw, caught, or got the D, when Statto has it
+  // wrong. Stored as edit: { thrower, receiver } / { player } (names) on the
+  // event's tag; the published Team Report is rebuilt with it, so every stat
+  // credits the right player. (Who pulled isn't in Statto at all: that's the
+  // pull's own Puller field.)
+  const EDIT_FIELDS = { pass: [['thrower', 'Thrower'], ['receiver', 'Receiver']], block: [['player', 'Got the D']] };
+  let editOpenFor = null;  // the step whose editor is open
+  function effectiveName(step, field) {
+    const e = (stepRecord(step) || {}).edit;
+    return (e && e[field]) || step.item[field] || null;
+  }
+  function editedNote(step) {
+    const e = (stepRecord(step) || {}).edit || {};
+    const changed = (EDIT_FIELDS[step.kind] || []).filter(([f]) => e[f] && e[f] !== step.item[f]);
+    return changed.map(([f, label]) => label + ' was ' + (step.item[f] || 'unknown') + ' in Statto').join('; ');
+  }
+  function setEdit(step, field, name) {
+    const rec = stepRecord(step) || {};
+    const e = Object.assign({}, rec.edit);
+    if (!name || name === step.item[field]) delete e[field]; else e[field] = name;
+    setField('edit', Object.keys(e).length ? e : undefined);
+    render();
+  }
+  function buildEditSection(step) {
+    const wrap = el('div', { class: 'de-edit' }, []);
+    const open = editOpenFor === step.uuid;
+    const note = editedNote(step);
+    const toggle = el('button', { class: 'pill-btn de-edit-btn', type: 'button', 'aria-expanded': open ? 'true' : 'false' },
+      [document.createTextNode(open ? 'Done editing' : 'Edit')]);
+    toggle.addEventListener('click', () => { editOpenFor = open ? null : step.uuid; render(); });
+    wrap.appendChild(el('div', { class: 'controls-row de-edit-row' }, [toggle,
+      el('span', { class: 'de-field-note' }, [document.createTextNode(note ? 'Edited: ' + note + '.' : (step.kind === 'pass' ? 'Change who threw or caught it.' : 'Change who got the D.'))])]));
+    if (!open) return wrap;
+    // That point's line first, then everyone else.
+    const line = (step.pt.lineup || []).map(x => x.player).filter(Boolean).sort();
+    const rest = allPlayerNames().filter(n => !line.includes(n));
+    EDIT_FIELDS[step.kind].forEach(([field, label]) => {
+      const sel = el('select', { class: 'de-select', 'aria-label': label }, []);
+      const group = (title, names) => { if (!names.length) return; const g = el('optgroup', { label: title }, []); names.forEach(n => g.appendChild(el('option', { value: n }, [document.createTextNode(n + (n === step.item[field] ? ' (in Statto)' : ''))]))); sel.appendChild(g); };
+      group('On the field this point', line);
+      group('Everyone else', rest);
+      const current = effectiveName(step, field);
+      if (current && !line.includes(current) && !rest.includes(current)) sel.appendChild(el('option', { value: current }, [document.createTextNode(current)]));
+      sel.value = current || '';
+      sel.addEventListener('change', () => setEdit(step, field, sel.value));
+      wrap.appendChild(el('label', { class: 'de-field de-field-wide' }, [el('span', { class: 'de-field-label' }, [document.createTextNode(label)]), sel]));
+    });
+    if (note) {
+      const reset = el('button', { class: 'pill-btn', type: 'button' }, [document.createTextNode('Back to what Statto has')]);
+      reset.addEventListener('click', () => { setField('edit', undefined); render(); });
+      wrap.appendChild(el('div', { class: 'controls-row' }, [reset]));
+    }
+    wrap.appendChild(el('p', { class: 'de-field-note' }, [document.createTextNode('Every stat uses the corrected player once the Team Report is published again.')]));
+    return wrap;
   }
   function renderPanelBody() {
     panel.innerHTML = '';
@@ -8809,8 +8869,8 @@ function buildDataEditorSection(viewer, tagOnlyGame) {
       const p = step.item;
       const outcome = p.assist ? 'Assist (goal)' : (p.throwerError && p.receiverError) ? 'Throwaway + drop' : p.throwerError ? 'Throwaway' : p.receiverError ? 'Drop' : 'Completed';
       panel.appendChild(el('div', { class: 'de-panel-head' }, [
-        el('div', { class: 'de-panel-title' }, [document.createTextNode(`${p.thrower || 'Unknown'} → ${p.receiver || 'Unknown'}`)]),
-        el('div', { class: 'de-panel-sub' }, [document.createTextNode(`Point ${step.pt.number} · ${outcome}`)]),
+        el('div', { class: 'de-panel-title' }, [document.createTextNode(`${effectiveName(step, 'thrower') || 'Unknown'} → ${effectiveName(step, 'receiver') || 'Unknown'}`)]),
+        el('div', { class: 'de-panel-sub' }, [document.createTextNode(`Point ${step.pt.number} · ${outcome}` + (editedNote(step) ? ' · Edited' : ''))]),
       ]));
       panel.appendChild(annChipField('Hand', ANNOTATION_VOCAB.hand, 'hand', rec));
       panel.appendChild(annChipField('Release', ANNOTATION_VOCAB.release, 'release', rec));
@@ -8825,8 +8885,8 @@ function buildDataEditorSection(viewer, tagOnlyGame) {
     } else {
       const b = step.item;
       panel.appendChild(el('div', { class: 'de-panel-head' }, [
-        el('div', { class: 'de-panel-title' }, [document.createTextNode(`${b.player || 'Unknown'} — block`)]),
-        el('div', { class: 'de-panel-sub' }, [document.createTextNode(`Point ${step.pt.number} · Defensive block`)]),
+        el('div', { class: 'de-panel-title' }, [document.createTextNode(`${effectiveName(step, 'player') || 'Unknown'} — block`)]),
+        el('div', { class: 'de-panel-sub' }, [document.createTextNode(`Point ${step.pt.number} · Defensive block` + (editedNote(step) ? ' · Edited' : ''))]),
       ]));
       const grid = el('div', { class: 'de-field-grid' }, []);
       grid.appendChild(annField('Block type', BLOCK_VOCAB.type, 'type', rec));
@@ -9137,8 +9197,10 @@ function playerFilmThrows(name, limit) {
     const vid = parseYouTubeId(links[gi]);
     if (!vid) return;
     (g.points || []).forEach(pt => (pt.passes || []).forEach(p => {
-      if (p.thrower !== name || !p.uuid) return;
+      if (!p.uuid) return;
       const rec = ann.passes[p.uuid];
+      // Who threw it: an "Edit" correction wins over Statto.
+      if (((rec && rec.edit && rec.edit.thrower) || p.thrower) !== name) return;
       if (!rec || rec.ignored || rec.timestamp == null || !isFinite(Number(rec.timestamp))) return;
       out.push({ game: g, vid, ts: Math.max(0, Math.floor(Number(rec.timestamp))), hand: rec.hand || null });
     }));

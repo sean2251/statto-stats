@@ -1110,6 +1110,28 @@ class BrowserTests(unittest.TestCase):
         page.click("button.de-flag-btn")
         page.wait_for_selector("button.de-flag-btn[aria-pressed=false]")
         wait_until(lambda: not (server_rec() or {}).get("outOfTimeout"), message="out of timeout cleared")
+
+        # "Edit" (below the ignore button) corrects the thrower; the published
+        # report credits the new one.
+        page.click("button.de-edit-btn")
+        thrower_sel = ".de-edit select[aria-label=Thrower]"
+        page.wait_for_selector(thrower_sel)
+        options = page.eval_on_selector_all(thrower_sel + " option", "e => e.map(o => o.value)")
+        new_thrower = next(n for n in options if n != target["thrower"])
+        page.select_option(thrower_sel, new_thrower)
+        wait_until(lambda: ((server_rec() or {}).get("edit") or {}).get("thrower") == new_thrower, message="edit saved")
+        self.assertIn(new_thrower + " →", page.text_content(".de-panel-title"))
+        self.assertIn("Thrower was " + target["thrower"], page.text_content(".de-edit"))
+        ed.reload()
+        self.setup_rows(ed)
+        new_full = ed.evaluate("t => (REPORT.seasonLeaderboard.find(r => r.player === t) || {}).throws || 0", new_thrower)
+        html, report = publish_and_read()
+        passes = [p for g in report["games"] for pt in g["points"] for p in pt["passes"] if p["uuid"] == target["uuid"]]
+        self.assertEqual(passes[0]["thrower"], new_thrower)
+        self.assertEqual(next(r for r in report["seasonLeaderboard"] if r["player"] == new_thrower)["throws"], new_full + 1)
+        page.click("button:has-text('Back to what Statto has')")
+        wait_until(lambda: not (server_rec() or {}).get("edit"), message="edit cleared")
+        self.assertIn(target["thrower"] + " →", page.text_content(".de-panel-title"))
         ed.reload()
         self.setup_rows(ed)
         html, report = publish_and_read()

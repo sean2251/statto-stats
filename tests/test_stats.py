@@ -206,6 +206,44 @@ const S = require(process.argv[1]);
             self.assertEqual(out[key][1], out[key][0] - 1, key)
         # Without ignores, the report is exactly the frozen one (test_example_season).
 
+    def test_edits_credit_the_right_player(self):
+        """An "Edit" correction (thrower, or who got the D) moves the credit."""
+        runner = r"""
+const fs = require('fs');
+const S = require(process.argv[1]);
+(async () => {
+  const buf = fs.readFileSync(process.argv[2]);
+  const full = (await S.reportFromStatto(buf)).report;
+  const pts = full.games.flatMap(g => g.points);
+  const pass = pts.flatMap(p => p.passes).find(p => !p.turnover && !p.assist && p.thrower);
+  const block = pts.flatMap(p => p.blocks).find(b => b.player);
+  const names = full.seasonLeaderboard.map(r => r.player);
+  const newThrower = names.find(n => n !== pass.thrower && n !== pass.receiver);
+  const newBlocker = names.find(n => n !== block.player);
+  const ann = { passes: { [pass.uuid]: { edit: { thrower: newThrower } } }, blocks: { [block.uuid]: { edit: { player: newBlocker } } } };
+  const fixed = (await S.reportFromStatto(buf, { edits: S.eventEdits(ann) })).report;
+  const row = (r, n) => r.seasonLeaderboard.find(x => x.player === n);
+  const after = fixed.games.flatMap(g => g.points).flatMap(p => p.passes).find(p => p.uuid === pass.uuid);
+  process.stdout.write(JSON.stringify({
+    none: S.eventEdits({ passes: {}, blocks: {} }),
+    thrower: after.thrower, want: newThrower,
+    oldThrows: [row(full, pass.thrower).throws, row(fixed, pass.thrower).throws],
+    newThrows: [row(full, newThrower).throws, row(fixed, newThrower).throws],
+    oldBlocks: [row(full, block.player).blocks, row(fixed, block.player).blocks],
+    newBlocks: [row(full, newBlocker).blocks, row(fixed, newBlocker).blocks],
+  }));
+})();
+"""
+        r = subprocess.run([NODE, "-e", runner, STATS_JS, self.paths["example"]], capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = json.loads(r.stdout)
+        self.assertIsNone(out["none"])
+        self.assertEqual(out["thrower"], out["want"])
+        self.assertEqual(out["oldThrows"][1], out["oldThrows"][0] - 1)
+        self.assertEqual(out["newThrows"][1], out["newThrows"][0] + 1)
+        self.assertEqual(out["oldBlocks"][1], out["oldBlocks"][0] - 1)
+        self.assertEqual(out["newBlocks"][1], out["newBlocks"][0] + 1)
+
     def test_not_a_statto_file(self):
         bad = os.path.join(self.tmp.name, "bad.statto")
         with open(bad, "wb") as f:

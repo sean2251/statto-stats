@@ -1622,6 +1622,12 @@
   .de-flag-row .pill-btn { margin-top: 0; }
   .de-flag-row .de-field-note { margin: 0; flex: 1; min-width: 160px; }
   .de-flag-btn.active { background: var(--chalk); color: var(--ink); border-color: var(--chalk); }
+  /* "Edit": correct the thrower / receiver / who got the D */
+  .de-edit { margin-top: 12px; }
+  .de-edit-row { gap: 10px; align-items: center; }
+  .de-edit-row .pill-btn, .de-edit .controls-row .pill-btn { margin-top: 0; }
+  .de-edit-row .de-field-note { margin: 0; flex: 1; min-width: 160px; }
+  .de-edit .de-field { margin-top: 10px; }
   .de-ignore-row .de-field-note { margin: 0; flex: 1; min-width: 160px; }
   .de-ignored-note { font-size: 13px; line-height: 1.5; color: var(--chalk); padding: 10px 12px; border-radius: 8px; border: 1px dashed rgba(var(--chalk-rgb),0.35); margin: 10px 0 0; }
   .de-select, .de-ts-input, .de-notes {

@@ -121,6 +121,14 @@ published again. If it's an assist or a turnover, that assist (and the goal)
 or turnover goes too; the panel says so. **Stop ignoring this event** puts it
 back. Its tags are kept either way.
 
+## Correcting who threw, caught or got the D
+
+Statto got a player wrong? On a pass or a block, **Edit** (below Ignore this
+event) opens the **Thrower** and **Receiver** (or **Got the D**) choices,
+listing that point's line first. Every stat credits the corrected player once
+the Team Report is published again; **Back to what Statto has** undoes it.
+(Who pulled is the pull's own **Puller** field: Statto doesn't record it.)
+
 ## Keyboard shortcuts
 
 Most throws are one of a handful of common types, so the number keys fill those
