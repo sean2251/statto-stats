@@ -478,7 +478,8 @@ filters:
 
 ## Defense  ·  *Team Report*
 
-The defensive video tagging in one place, with a **games filter**:
+The defensive video tagging in one place, with a **games filter**. Click any
+column heading to sort a table by it; click again to reverse the order.
 
 - **Schemes** — each opponent possession tagged with the defence we played:
   how many we stopped (it ended in a turnover), how many they scored on, and
