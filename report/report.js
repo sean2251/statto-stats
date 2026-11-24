@@ -9665,12 +9665,53 @@ function buildHandednessSection() {
 // ---------- Defense (Team Report): the defensive video tagging, together ----------
 // Schemes and how they did, the opponents' turnovers, blocks by player, and
 // our pullers -- for the games chosen.
-function filmTable(headers, rows, opts) {
-  opts = opts || {};
-  const table = el('table', { class: 'stats film-table' }, [
-    el('thead', {}, [el('tr', {}, headers.map((h, i) => el('th', i === 0 ? { class: 'row-label' } : {}, [document.createTextNode(h)])))]),
-    el('tbody', {}, rows.map(r => el('tr', r.cls ? { class: r.cls } : {}, r.cells.map((c, i) => el('td', i === 0 ? { class: 'row-label' } : {}, [c instanceof Node ? c : document.createTextNode(c == null ? '–' : String(c))]))))),
-  ]);
+// Click a heading to sort by that column (numbers largest first, names A–Z);
+// click it again to reverse. Footer rows (cls 'film-foot': "Not tagged" and
+// the like) stay at the bottom, and blank cells sort last either way.
+function filmSortValue(c) {
+  if (c == null || c === '' || c === '–') return null;
+  if (typeof c === 'number') return c;
+  const str = c instanceof Node ? c.textContent : String(c);
+  const n = parseFloat(str);
+  return /^-?\d/.test(str) && !Number.isNaN(n) ? n : str.toLowerCase();
+}
+function filmTable(headers, rows) {
+  const tbody = el('tbody', {}, []);
+  const arrows = [];
+  const ths = headers.map((h, i) => {
+    const arrow = el('span', { class: 'arrow' }, []);
+    arrows.push(arrow);
+    const th = el('th', Object.assign({ 'aria-sort': 'none' }, i === 0 ? { class: 'row-label' } : {}), [document.createTextNode(h), arrow]);
+    th.addEventListener('click', () => {
+      if (sortCol === i) sortDir = -sortDir;
+      else { sortCol = i; sortDir = rows.some(r => typeof filmSortValue(r.cells[i]) === 'string') ? 1 : -1; }
+      render();
+    });
+    return th;
+  });
+  let sortCol = -1, sortDir = 1;
+  function render() {
+    const body = rows.filter(r => r.cls !== 'film-foot');
+    const foot = rows.filter(r => r.cls === 'film-foot');
+    if (sortCol >= 0) {
+      body.sort((a, b) => {
+        const av = filmSortValue(a.cells[sortCol]), bv = filmSortValue(b.cells[sortCol]);
+        if (av == null || bv == null) return (av == null) - (bv == null);
+        if (typeof av === 'number' && typeof bv === 'number') return sortDir * (av - bv);
+        return sortDir * String(av).localeCompare(String(bv));
+      });
+    }
+    ths.forEach((th, i) => {
+      th.classList.toggle('sorted', i === sortCol);
+      th.setAttribute('aria-sort', i === sortCol ? (sortDir === 1 ? 'ascending' : 'descending') : 'none');
+      arrows[i].textContent = i === sortCol ? (sortDir === -1 ? '▼' : '▲') : '';
+    });
+    tbody.innerHTML = '';
+    body.concat(foot).forEach(r => tbody.appendChild(el('tr', r.cls ? { class: r.cls } : {}, r.cells.map((c, i) =>
+      el('td', i === 0 ? { class: 'row-label' } : {}, [c instanceof Node ? c : document.createTextNode(c == null ? '–' : String(c))])))));
+  }
+  render();
+  const table = el('table', { class: 'stats film-table sortable' }, [el('thead', {}, [el('tr', {}, ths)]), tbody]);
   return el('div', { class: 'table-scroll' }, [table]);
 }
 function buildDefenseSection() {

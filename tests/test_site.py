@@ -1250,6 +1250,15 @@ class BrowserTests(unittest.TestCase):
         self.assertIn("Person", text)
         self.assertIn("Pullers", text)
         self.assertIn(pick["thrower"], text)
+        # Every Defense table sorts by any column, both ways; "Not tagged" stays last.
+        schemes = "#defense .film-table >> nth=0"
+        head = schemes + " >> th >> nth=1"
+        view.click(head)
+        self.assertEqual(view.get_attribute(head, "aria-sort"), "descending")
+        view.click(head)
+        self.assertEqual(view.get_attribute(head, "aria-sort"), "ascending")
+        self.assertEqual(view.text_content(schemes + " >> tbody tr >> nth=-1 >> td >> nth=0"), "Not tagged")
+        self.assertEqual(view.eval_on_selector_all("#defense .film-table", "ts => ts.every(t => t.classList.contains('sortable'))"), True)
         view.evaluate("() => showView('my-clips')")
         view.wait_for_selector("#my-clips select")
         view.select_option("#my-clips select", pick["thrower"])
