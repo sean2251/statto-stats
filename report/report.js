@@ -322,10 +322,12 @@ function buildNav() {
     nav.appendChild(buildGamesNavDropdown());
     // The Data Editor becomes a read-only "Film Clips" browser here.
     nav.appendChild(el('button', { class: 'tab', 'data-target': 'data-editor' }, [document.createTextNode('Film Clips')]));
+    nav.appendChild(el('button', { class: 'tab', 'data-target': 'my-clips' }, [document.createTextNode('My clips')]));
     nav.appendChild(el('button', { class: 'tab', 'data-target': 'player-analysis' }, [document.createTextNode('Player Analysis')]));
     nav.appendChild(el('button', { class: 'tab', 'data-target': 'line-analysis' }, [document.createTextNode('Line Analysis')]));
     nav.appendChild(el('button', { class: 'tab', 'data-target': 'thrower-receiver-analysis' }, [document.createTextNode('Thrower-Receiver Analysis')]));
     nav.appendChild(el('button', { class: 'tab', 'data-target': 'field-analysis' }, [document.createTextNode('Field Analysis')]));
+    nav.appendChild(el('button', { class: 'tab', 'data-target': 'defense' }, [document.createTextNode('Defense')]));
     nav.appendChild(el('button', { class: 'tab', 'data-target': 'gender-analysis' }, [document.createTextNode('Gender Analysis')]));
     nav.appendChild(el('button', { class: 'tab', 'data-target': 'time-series' }, [document.createTextNode('Time Series')]));
     nav.appendChild(el('button', { class: 'tab', 'data-target': 'advanced-stats' }, [document.createTextNode('Advanced Stats')]));
@@ -1663,6 +1665,8 @@ function buildFieldAnalysisSection() {
   section.appendChild(layout);
   const legendHolder = el('div', {}, []);
   section.appendChild(legendHolder);
+  // Our pulls, from the video tagging (shown once any is tagged).
+  const pullHolder = el('div', {}, []);
 
   // Remembered video width (drag to resize).
   const FA_VIDEO_SIZE_KEY = 'statto-report-fa-video-width::' + REPORT.teamName;
@@ -1736,7 +1740,7 @@ function buildFieldAnalysisSection() {
     if (['combined', 'offense', 'defense'].includes(shared.pointType)) pointTypeFilter = shared.pointType;
     if (shared.possession === 'final' || shared.possession === 'possession') possessionMode = shared.possession;
     if (shared.field === 'full' || shared.field === 'redzone') fieldMode = shared.field;
-    if (['outcome', 'thrower', 'receiver', 'game'].includes(shared.colorBy)) colorBy = shared.colorBy;
+    if (['outcome', 'thrower', 'receiver', 'game', 'hand', 'release', 'distance'].includes(shared.colorBy)) colorBy = shared.colorBy;
     if (shared.video) videoMode = true;
   }
   videoCol.style.display = videoMode ? '' : 'none';
@@ -1744,14 +1748,23 @@ function buildFieldAnalysisSection() {
   // Colour scheme for a "Color by" mode: assign each distinct value on the
   // diagram a palette colour (green/red-free, so a route never reads as an
   // outcome) and build the matching legend.
+  // Colour by a video tag (hand / release / distance): each throw's tagged
+  // value, in the vocabulary's order, with untagged throws in grey.
+  const TAG_COLOR_FIELDS = ['hand', 'release', 'distance'];
   function fieldColorScheme(passes) {
-    const keyFor = (p, gi) => colorBy === 'thrower' ? (p.thrower || '?') : colorBy === 'receiver' ? (p.receiver || '?') : String(gi);
+    const byTag = TAG_COLOR_FIELDS.includes(colorBy);
+    const ann = byTag ? loadAnnotations() : null;
+    const tagOf = p => { const r = annotationRecordFor(ann, { kind: 'pass', uuid: p.uuid }); return (r && r[colorBy]) || 'Not tagged'; };
+    const keyFor = (p, gi) => byTag ? tagOf(p) : colorBy === 'thrower' ? (p.thrower || '?') : colorBy === 'receiver' ? (p.receiver || '?') : String(gi);
     const labelFor = (k) => colorBy === 'game' ? ('vs ' + (REPORT.games[Number(k)] ? REPORT.games[Number(k)].opponent : '?')) : k;
     const seen = [];
     passes.forEach(({ pass: p, gameIndex }) => { const k = keyFor(p, gameIndex); if (!seen.includes(k)) seen.push(k); });
-    seen.sort((a, b) => colorBy === 'game' ? Number(a) - Number(b) : a.localeCompare(b));
+    const vocab = byTag ? ANNOTATION_VOCAB[colorBy] : null;
+    const rank = k => k === 'Not tagged' ? 999 : (vocab.indexOf(k) < 0 ? 500 : vocab.indexOf(k));
+    seen.sort((a, b) => byTag ? rank(a) - rank(b) : colorBy === 'game' ? Number(a) - Number(b) : a.localeCompare(b));
     const colorMap = {};
-    seen.forEach((k, i) => { colorMap[k] = FIELD_COLORBY_COLORS[i % FIELD_COLORBY_COLORS.length]; });
+    seen.filter(k => !(byTag && k === 'Not tagged')).forEach((k, i) => { colorMap[k] = FIELD_COLORBY_COLORS[i % FIELD_COLORBY_COLORS.length]; });
+    if (byTag) colorMap['Not tagged'] = 'var(--chalk-dim)';
     return {
       colorFn: (p, gi) => colorMap[keyFor(p, gi)] || 'var(--chalk)',
       legend: buildFieldColorLegend(seen.map(k => ({ color: colorMap[k], label: labelFor(k) }))),
@@ -1770,6 +1783,9 @@ function buildFieldAnalysisSection() {
       legendHolder.appendChild(scheme.legend);
     }
     renderPlayerImpact(routeLayer, passes, blocks, impactOpts);
+    pullHolder.innerHTML = '';
+    const pullMap = buildPullMap(selectedGames);
+    if (pullMap) pullHolder.appendChild(pullMap);
   }
 
   const categoryControl = buildImpactCategoryDropdown((cats) => { categories = cats; render(); }, null, { initialSelected: [...categories] });
@@ -1806,6 +1822,9 @@ function buildFieldAnalysisSection() {
       { key: 'thrower', label: 'Thrower' },
       { key: 'receiver', label: 'Receiver' },
       { key: 'game', label: 'Game' },
+      { key: 'hand', label: 'Hand' },
+      { key: 'release', label: 'Release' },
+      { key: 'distance', label: 'Distance' },
     ], (key) => { colorBy = key; render(); }, colorBy),
   ]));
   controlsRow.appendChild(el('label', { class: 'ts-field' }, [
@@ -1866,9 +1885,45 @@ function buildFieldAnalysisSection() {
     return st;
   }));
 
+  section.appendChild(pullHolder);
   updateControlAvailability();
   render();
   return section;
+}
+
+// Where our pulls went (the games chosen), from the video tagging: in-bounds
+// landing spots and out-of-bounds tap-in spots on one field, with the counts.
+// Null when no pull is tagged.
+function buildPullMap(gameIndices) {
+  const pulls = filmEvents(gameIndices).filter(e => e.ev.kind === 'pull');
+  const tagged = pulls.filter(e => e.rec);
+  if (!tagged.length) return null;
+  const inb = tagged.filter(e => !e.rec.outOfBounds && e.rec.landX != null && e.rec.landY != null);
+  const oob = tagged.filter(e => e.rec.outOfBounds);
+  const { svg, routeLayer } = buildPitch();
+  svg.style.maxWidth = '240px';
+  const dot = (e, x, y, isOob) => {
+    const cx = x * PITCH_W, cy = y * PITCH_H;
+    const g = svgEl('g', {});
+    if (isOob) g.appendChild(svgEl('circle', { cx, cy, r: 8, fill: 'none', stroke: '#E3B341', 'stroke-width': 1.6, 'stroke-dasharray': '4 3' }));
+    g.appendChild(svgEl('circle', { cx, cy, r: 4, fill: isOob ? '#E3B341' : '#4FD1AE', stroke: '#0E2426', 'stroke-width': 1 }));
+    const t = svgEl('title', {});
+    t.textContent = 'vs ' + e.game.opponent + ' · Pt ' + e.pt.number + (e.rec.puller ? ' · ' + e.rec.puller : '') + (isOob ? ' · out of bounds, tapped in here' : ' · landed here');
+    g.appendChild(t);
+    routeLayer.appendChild(g);
+  };
+  inb.forEach(e => dot(e, e.rec.landX, e.rec.landY, false));
+  oob.filter(e => e.rec.tapInY != null).forEach(e => dot(e, PULL_TAP_IN_X, e.rec.tapInY, true));
+  const stat = (label, value) => el('div', { class: 'pull-stat' }, [el('div', { class: 'pull-stat-value' }, [document.createTextNode(value)]), el('div', { class: 'pull-stat-label' }, [document.createTextNode(label)])]);
+  return el('div', {}, [
+    el('h2', { class: 'section-title' }, [document.createTextNode('Our pulls')]),
+    el('p', { class: 'pitch-caption' }, [document.createTextNode('From the video tagging: where our pulls landed (teal) and, for the ones that went out of bounds, where the disc was tapped in (amber, dashed). Hover a spot for the game, point and puller. Who pulled best is on the Defense tab.')]),
+    el('div', { class: 'pull-map' }, [svg, el('div', { class: 'pull-stats' }, [
+      stat('pulls tagged', tagged.length + ' of ' + pulls.length),
+      stat('in bounds', String(tagged.length - oob.length)),
+      stat('out of bounds', oob.length + (tagged.length ? ' (' + Math.round(100 * oob.length / tagged.length) + '%)' : '')),
+    ])]),
+  ]);
 }
 
 // Rasterizes the current field diagram plus a small header summarizing the
@@ -2528,18 +2583,99 @@ function buildDiffChart(points) {
   return { svg, dotsByNumber };
 }
 
+// ---------- From the film: the video tagging, across the Team Report ----------
+function filmPct(c, a) { return a ? Math.round(100 * c / a) : null; }
+function filmVideoId(gi) { return parseYouTubeId(loadSetupData().videoLinks[gi]); }
+// A clip: a link to that moment in the game's video, or plain text without one.
+function filmClipEl(gi, ts, label) {
+  const vid = filmVideoId(gi);
+  const hasTs = ts != null && isFinite(Number(ts));
+  const text = label + (hasTs ? ' · ' + formatTimestamp(Number(ts)) : '');
+  return (vid && hasTs)
+    ? el('a', { href: youtubeTimestampUrl(vid, Math.max(0, Math.floor(Number(ts)))), target: '_blank', rel: 'noopener noreferrer', class: 'film-clip' }, [document.createTextNode('▶ ' + text)])
+    : el('span', { class: 'film-clip none' }, [document.createTextNode(text)]);
+}
+// Every event of the chosen games, with its tag record (null when untagged or
+// ignored): { gi, game, pt, ev, rec }.
+function filmEvents(gameIndices) {
+  const ann = loadAnnotations();
+  const out = [];
+  gameIndices.forEach(gi => {
+    const game = REPORT.games[gi];
+    (game.points || []).forEach(pt => buildPointEvents(pt).forEach(ev => {
+      const rec = annotationRecordFor(ann, ev);
+      out.push({ gi, game, pt, ev, rec: rec && Object.keys(rec).length ? rec : null });
+    }));
+  });
+  return out;
+}
+// Throws grouped by their tags, for completion rates.
+const FILM_THROW_GROUPS = [
+  { label: 'Backhands', test: r => r.hand === 'Backhand' || r.hand === 'Offhand backhand' },
+  { label: 'Flicks', test: r => r.hand === 'Flick' },
+  { label: 'Hammers & scoobers', test: r => r.hand === 'Hammer' || r.hand === 'Scoober' },
+  { label: 'Break throws', test: r => r.release === 'Breakside around' || r.release === 'Breakside inside' },
+  { label: 'Hucks', test: r => r.distance === 'Huck' },
+  { label: 'Resets', test: r => r.distance === 'Reset' },
+];
+// The throws matching match(pass): how many, how many tagged, completion by
+// FILM_THROW_GROUPS, and their turnovers' reasons.
+function filmThrowProfile(events, match) {
+  const prof = { throws: 0, tagged: 0, groups: FILM_THROW_GROUPS.map(() => ({ att: 0, comp: 0 })), reasons: new Map() };
+  events.forEach(e => {
+    if (e.ev.kind !== 'pass' || !match(e.ev.item)) return;
+    const p = e.ev.item;
+    prof.throws++;
+    if (!e.rec) return;
+    prof.tagged++;
+    FILM_THROW_GROUPS.forEach((g, i) => { if (g.test(e.rec)) { prof.groups[i].att++; if (!p.turnover) prof.groups[i].comp++; } });
+    if (p.turnover) [].concat(e.rec.turnoverReason || []).filter(Boolean).forEach(r => prof.reasons.set(r, (prof.reasons.get(r) || 0) + 1));
+  });
+  return prof;
+}
+// Comparison-table rows for a profile (get(column) -> profile).
+function filmProfileRows(get) {
+  return [
+    { label: 'Throws tagged', tip: 'Throws with at least one video tag. The rates below count tagged throws only.', main: x => fmtPct(filmPct(get(x).tagged, get(x).throws)), sub: x => `${get(x).tagged}/${get(x).throws}` },
+  ].concat(FILM_THROW_GROUPS.map((g, i) => ({
+    label: g.label + ' completed',
+    main: x => fmtPct(filmPct(get(x).groups[i].comp, get(x).groups[i].att)),
+    sub: x => `${get(x).groups[i].comp}/${get(x).groups[i].att}`,
+  }))).concat([
+    { label: 'Turnover reasons', render: x => filmCountList(get(x).reasons, 4) },
+  ]);
+}
+// "Drop ×3" lines for the biggest counts in a Map.
+function filmCountList(map, max) {
+  const items = [...map.entries()].sort((a, b) => b[1] - a[1]);
+  if (!items.length) return el('span', { class: 'film-dim' }, [document.createTextNode('–')]);
+  const shown = items.slice(0, max).map(([k, n]) => el('div', { class: 'film-count' }, [document.createTextNode(k + ' ×' + n)]));
+  if (items.length > max) shown.push(el('div', { class: 'film-dim' }, [document.createTextNode('+' + (items.length - max) + ' more')]));
+  return el('div', {}, shown);
+}
+// Up to `max` clip links (for a comparison-table cell).
+function filmClipList(list, max) {
+  if (!list.length) return el('span', { class: 'film-dim' }, [document.createTextNode('–')]);
+  const out = list.slice(0, max).map(c => filmClipEl(c.gi, c.ts, c.label));
+  if (list.length > max) out.push(el('span', { class: 'film-dim' }, [document.createTextNode('+' + (list.length - max) + ' more in My clips')]));
+  return el('div', { class: 'film-clip-list' }, out);
+}
+function passOutcomeWord(p) {
+  return p.assist ? 'Assist' : (p.throwerError && p.receiverError) ? 'Throwaway + drop' : p.throwerError ? 'Throwaway' : p.receiverError ? 'Drop' : 'Completed';
+}
+
 // ---------- Turnovers by type (a game page, from the video tagging) ----------
 // Ours: each turnover pass's tagged reason(s) -- a turnover can have more than
 // one, so the slices count reasons and can add up to more than the turnovers.
 // Theirs: every opponent turnover once -- our blocks by block type, their
 // unforced errors by type. Untagged ones are a "Not tagged" slice.
 const PIE_MAX_NAMED = 5;
-function gameTurnoverBreakdown(game) {
+function gameTurnoverBreakdown(games) {
   const ann = loadAnnotations();
   const ours = new Map(), theirs = new Map();
   let ourTurnovers = 0, ourUntagged = 0, theirTurnovers = 0, theirUntagged = 0;
   const add = (m, k) => m.set(k, (m.get(k) || 0) + 1);
-  (game.points || []).forEach(pt => {
+  [].concat(games).forEach(game => (game.points || []).forEach(pt => {
     buildPointEvents(pt).forEach(ev => {
       const rec = annotationRecordFor(ann, ev);
       if (ev.kind === 'pass' && ev.item.turnover) {
@@ -2554,7 +2690,7 @@ function gameTurnoverBreakdown(game) {
         if (rec && rec.oppTurnover) add(theirs, rec.oppTurnover); else theirUntagged++;
       }
     });
-  });
+  }));
   return {
     ours: { total: ourTurnovers, counts: ours, untagged: ourUntagged, order: ANNOTATION_VOCAB.turnoverReason },
     theirs: { total: theirTurnovers, counts: theirs, untagged: theirUntagged, order: BLOCK_VOCAB.type.concat(POINT_VOCAB.oppTurnover) },
@@ -2605,10 +2741,66 @@ function buildDonut(slices, centerBig, centerSmall, ariaLabel) {
   svg.appendChild(big); svg.appendChild(small);
   return svg;
 }
-// The two pies, side by side -- or null when none of the game's turnovers
-// has been tagged (a single "Not tagged" ring says nothing).
-function buildTurnoverTypeCharts(game) {
-  const b = gameTurnoverBreakdown(game);
+// Our turnover reasons game by game (games in date order, as columns), so a
+// trend shows: a reason that keeps growing, or one that went away. Null when
+// none is tagged.
+// The opponent's possessions on these points ({ gameIndex, point } list), by
+// our tagged defensive scheme: how many, and how many we stopped (a turnover,
+// rather than their goal). A possession ends in their goal only when it's the
+// last one of a point they scored.
+function defenseBySchemeFor(points) {
+  const ann = loadAnnotations();
+  const out = { possessions: 0, tagged: 0, byScheme: new Map(), oppTimeouts: { n: 0, stops: 0 } };
+  points.forEach(({ point: pt }) => {
+    const n = pt.defensivePossessions || 0;
+    for (let d = 1; d <= n; d++) {
+      out.possessions++;
+      const rec = annotationRecordFor(ann, { kind: 'def', uuid: pt.uuid + '#d' + d });
+      const stopped = !(pt.result === -1 && d === n);
+      if (rec && rec.oppTimeout) { out.oppTimeouts.n++; if (stopped) out.oppTimeouts.stops++; }
+      if (!rec || !rec.defScheme) continue;
+      out.tagged++;
+      const t = out.byScheme.get(rec.defScheme) || { n: 0, stops: 0 };
+      t.n++; if (stopped) t.stops++;
+      out.byScheme.set(rec.defScheme, t);
+    }
+  });
+  return out;
+}
+
+function buildTurnoverReasonTrend(gameIndices) {
+  const perGame = gameIndices.map(gi => ({ gi, b: gameTurnoverBreakdown([REPORT.games[gi]]).ours }));
+  const totals = new Map();
+  perGame.forEach(({ b }) => b.counts.forEach((n, k) => totals.set(k, (totals.get(k) || 0) + n)));
+  if (!totals.size) return null;
+  const reasons = [...totals.entries()].sort((a, b) => b[1] - a[1]).map(x => x[0]);
+  const max = Math.max(...perGame.flatMap(({ b }) => [...b.counts.values()]));
+  const cell = (n) => {
+    const td = el('td', { class: 'trend-cell' }, [document.createTextNode(n ? String(n) : '·')]);
+    // A faint fill that deepens with the count, so the eye finds the hot spots.
+    if (n) td.style.background = `rgba(var(--bad-rgb), ${(0.12 + 0.5 * n / max).toFixed(2)})`;
+    return td;
+  };
+  const table = el('table', { class: 'stats trend-table' }, [
+    el('thead', {}, [el('tr', {}, [el('th', { class: 'row-label' }, [document.createTextNode('Reason')])].concat(
+      perGame.map(({ gi }) => el('th', { title: REPORT.games[gi].dateDisplay }, [document.createTextNode('vs ' + REPORT.games[gi].opponent)])),
+      [el('th', {}, [document.createTextNode('Total')])]))]),
+    el('tbody', {}, reasons.map(r => el('tr', {}, [el('td', { class: 'row-label' }, [document.createTextNode(r)])].concat(
+      perGame.map(({ b }) => cell(b.counts.get(r) || 0)), [el('td', { class: 'trend-total' }, [document.createTextNode(String(totals.get(r)))])]))).concat([
+      el('tr', { class: 'trend-foot' }, [el('td', { class: 'row-label' }, [document.createTextNode('Turnovers (not tagged)')])].concat(
+        perGame.map(({ b }) => el('td', {}, [document.createTextNode(b.total + (b.untagged ? ' (' + b.untagged + ')' : ''))])),
+        [el('td', { class: 'trend-total' }, [document.createTextNode(String(perGame.reduce((n, { b }) => n + b.total, 0)))])])),
+    ])),
+  ]);
+  return el('div', { class: 'table-scroll' }, [table]);
+}
+
+// The two pies, side by side, for one game or several -- or null when none of
+// their turnovers has been tagged (a single "Not tagged" ring says nothing).
+// opts.theirLabel: the opponent's pie title; opts.only: 'ours' | 'theirs'.
+function buildTurnoverTypeCharts(games, opts) {
+  opts = opts || {};
+  const b = gameTurnoverBreakdown(games);
   if (!b.ours.counts.size && !b.theirs.counts.size) return null;
   const wrap = el('div', { class: 'pie-pair' }, []);
   // One hatch pattern for "Not tagged", shared by both pies on the page.
@@ -2618,11 +2810,11 @@ function buildTurnoverTypeCharts(game) {
       '<rect width="6" height="6" fill="var(--pie-none)"/><line x1="0" y1="0" x2="0" y2="6" stroke="var(--pie-none-line)" stroke-width="2"/></pattern></defs>';
     wrap.appendChild(defs);
   }
-  [['ours', 'Our turnovers', 'turnovers', 'reasons'], ['theirs', game.opponent + '’s turnovers', 'turnovers', null]].forEach(([key, title, word, unit]) => {
+  [['ours', 'Our turnovers', 'turnovers', 'reasons'], ['theirs', opts.theirLabel || 'Their turnovers', 'turnovers', null]].filter(x => !opts.only || x[0] === opts.only).forEach(([key, title, word, unit]) => {
     const side = b[key];
     const card = el('div', { class: 'pie-card' }, [el('div', { class: 'pie-title' }, [document.createTextNode(title)])]);
     if (!side.total) {
-      card.appendChild(el('p', { class: 'pitch-caption' }, [document.createTextNode('None this game.')]));
+      card.appendChild(el('p', { class: 'pitch-caption' }, [document.createTextNode('None.')]));
     } else if (!side.counts.size) {
       card.appendChild(el('p', { class: 'pitch-caption' }, [document.createTextNode(side.total + ' ' + word + ', none tagged yet.')]));
     } else {
@@ -2681,7 +2873,7 @@ function buildGameSection(game, index) {
 
   // How the game's turnovers happened, from the video tagging (shown once
   // any of them is tagged).
-  const turnoverCharts = buildTurnoverTypeCharts(game);
+  const turnoverCharts = buildTurnoverTypeCharts([game], { theirLabel: game.opponent + '’s turnovers' });
   if (turnoverCharts) {
     section.appendChild(el('h2', { class: 'section-title' }, [document.createTextNode('Turnovers by type')]));
     section.appendChild(turnoverCharts);
@@ -3698,6 +3890,33 @@ function buildPlayerAnalysisSection() {
     )]));
     contentArea.appendChild(buildConnectionsSection(players, selectedGames));
 
+    // From the film: what the video tagging says about each player's throwing.
+    const events = filmEvents(selectedGames);
+    if (events.some(e => e.rec)) {
+      contentArea.appendChild(el('h2', { class: 'section-title' }, [document.createTextNode('From the film')]));
+      contentArea.appendChild(el('p', { class: 'pitch-caption' }, [document.createTextNode(
+        'From the video tagging: each player’s completion rate by throw type (tagged throws only), the reasons for their turnovers, and links to their throwaways and drops in the game video.'
+      )]));
+      const film = selectedPlayers.map(name => {
+        const clip = e => ({ gi: e.gi, ts: e.rec && e.rec.timestamp, label: 'vs ' + e.game.opponent + ' · Pt ' + e.pt.number + ' · ' + passOutcomeWord(e.ev.item) +
+          (e.rec && e.rec.turnoverReason && [].concat(e.rec.turnoverReason).length ? ' (' + [].concat(e.rec.turnoverReason).join(', ') + ')' : '') });
+        const giveaways = events.filter(e => e.ev.kind === 'pass' && e.ev.item.thrower === name && e.ev.item.throwerError);
+        const drops = events.filter(e => e.ev.kind === 'pass' && e.ev.item.receiver === name && e.ev.item.receiverError);
+        return {
+          player: name,
+          film: filmThrowProfile(events, p => p.thrower === name),
+          drops: drops.length,
+          dropsTagged: drops.filter(e => e.rec).length,
+          clips: giveaways.concat(drops).filter(e => e.rec && e.rec.timestamp != null).map(clip),
+        };
+      });
+      const rows = filmProfileRows(x => x.film).concat([
+        { label: 'Drops (as receiver)', get: x => x.drops },
+        { label: 'Throwaways & drops on film', render: x => filmClipList(x.clips, 5) },
+      ]);
+      contentArea.appendChild(buildComparisonTable(rows, film, 'player'));
+    }
+
     contentArea.appendChild(buildImpactSection(players, selectedGames));
   }
 
@@ -4338,6 +4557,29 @@ function buildSeasonSection() {
 
   section.appendChild(el('h2', { class: 'section-title' }, [document.createTextNode('Clutch Efficiency')]));
   section.appendChild(buildClutchEfficiencyWidget(REPORT.seasonClutchEfficiency));
+
+  // Turnovers by type, from the video tagging (once any is tagged): the same
+  // pies as a game page, for the games chosen, and how each reason trends.
+  const allGames = REPORT.games.map((g, i) => i);
+  if (buildTurnoverTypeCharts(REPORT.games)) {
+    const toHeader = el('div', { class: 'section-title-row' }, [el('span', {}, [document.createTextNode('Turnovers by type')])]);
+    const toHolder = el('div', {}, []);
+    const renderTurnovers = (indices) => {
+      toHolder.innerHTML = '';
+      const games = indices.map(i => REPORT.games[i]);
+      const charts = buildTurnoverTypeCharts(games, { theirLabel: 'Opponents’ turnovers' });
+      toHolder.appendChild(charts || el('p', { class: 'pitch-caption' }, [document.createTextNode('None of these games’ turnovers is tagged yet.')]));
+      const trend = buildTurnoverReasonTrend(indices);
+      if (trend) {
+        toHolder.appendChild(el('h3', { class: 'film-subtitle' }, [document.createTextNode('Turnover reasons by game')]));
+        toHolder.appendChild(trend);
+      }
+    };
+    toHeader.appendChild(buildGameFilterDropdown(renderTurnovers));
+    section.appendChild(toHeader);
+    section.appendChild(toHolder);
+    renderTurnovers(allGames);
+  }
 
   const leaderboardHeader = el('div', { class: 'section-title-row' }, [
     el('span', {}, [document.createTextNode('Season leaderboard')]),
@@ -6395,6 +6637,24 @@ function buildLineAnalysisSection(variant) {
       contentArea.appendChild(el('h2', { class: 'section-title' }, [document.createTextNode('Scoring Efficiency')]));
       contentArea.appendChild(buildLineScoringEfficiencyComparison(entities));
 
+      // Defence by scheme, from the video tagging.
+      const defense = selectedLines.map(l => ({ name: displayName(l), d: defenseBySchemeFor(resolveLinePoints(l.pointKeys, selectedGames)) }));
+      const schemes = [...new Set(defense.flatMap(x => [...x.d.byScheme.keys()]))]
+        .sort((a, b) => defSchemesInUse().indexOf(a) - defSchemesInUse().indexOf(b));
+      if (schemes.length) {
+        contentArea.appendChild(el('h2', { class: 'section-title' }, [document.createTextNode('Defence by scheme')]));
+        contentArea.appendChild(el('p', { class: 'pitch-caption' }, [document.createTextNode(
+          'From the video tagging: for each defence a line played, how often the opponent’s possession ended in a turnover rather than a goal (“stopped”). Only possessions tagged with a scheme count.'
+        )]));
+        const rows = [{ label: 'Possessions tagged', main: x => fmtPct(filmPct(x.d.tagged, x.d.possessions)), sub: x => `${x.d.tagged}/${x.d.possessions}` }]
+          .concat(schemes.map(sc => ({
+            label: sc + ': stopped',
+            main: x => { const t = x.d.byScheme.get(sc); return fmtPct(t ? filmPct(t.stops, t.n) : null); },
+            sub: x => { const t = x.d.byScheme.get(sc); return t ? `${t.stops}/${t.n}` : '0/0'; },
+          })));
+        contentArea.appendChild(buildComparisonTable(rows, defense, 'name', { mobileCards: true }));
+      }
+
       contentArea.appendChild(el('h2', { class: 'section-title' }, [document.createTextNode('Field Diagrams')]));
       let fieldCategories = new Set(['all']);
       const renderers = [];
@@ -7049,6 +7309,14 @@ function buildThrowerReceiverSection() {
     // to the field diagrams they describe.
     compareWrap.appendChild(buildStatsTable(chosen, PAIR_COLUMNS, 'n', `${slug(REPORT.teamName)}_compared_pairs.csv`));
     compareWrap.appendChild(buildPairComparisonSection(chosen, selectedGames));
+    // From the film: each pair's completion by throw type (tagged throws only).
+    const events = filmEvents(selectedGames);
+    const film = chosen.map(p => ({ pair: p.pair, film: filmThrowProfile(events, x => x.thrower === p.thrower && x.receiver === p.receiver) }));
+    if (film.some(x => x.film.tagged)) {
+      compareWrap.appendChild(el('h2', { class: 'section-title' }, [document.createTextNode('From the film')]));
+      compareWrap.appendChild(el('p', { class: 'pitch-caption' }, [document.createTextNode('From the video tagging: how each connection completes by throw type (tagged throws only), and why its turnovers happened.')]));
+      compareWrap.appendChild(buildComparisonTable(filmProfileRows(x => x.film), film, 'pair'));
+    }
   }
 
   controlsRow.appendChild(buildGameFilterDropdown((indices) => { selectedGames = indices; renderTop(); }, { initialSelected: selectedGames }));
@@ -9394,6 +9662,175 @@ function buildHandednessSection() {
   return section;
 }
 
+// ---------- Defense (Team Report): the defensive video tagging, together ----------
+// Schemes and how they did, the opponents' turnovers, blocks by player, and
+// our pullers -- for the games chosen.
+function filmTable(headers, rows, opts) {
+  opts = opts || {};
+  const table = el('table', { class: 'stats film-table' }, [
+    el('thead', {}, [el('tr', {}, headers.map((h, i) => el('th', i === 0 ? { class: 'row-label' } : {}, [document.createTextNode(h)])))]),
+    el('tbody', {}, rows.map(r => el('tr', r.cls ? { class: r.cls } : {}, r.cells.map((c, i) => el('td', i === 0 ? { class: 'row-label' } : {}, [c instanceof Node ? c : document.createTextNode(c == null ? '–' : String(c))]))))),
+  ]);
+  return el('div', { class: 'table-scroll' }, [table]);
+}
+function buildDefenseSection() {
+  const section = el('section', { class: 'view', id: 'defense' }, []);
+  section.appendChild(el('p', { class: 'eyebrow' }, [document.createTextNode('Defense')]));
+  section.appendChild(el('p', { class: 'hero-sub' }, [document.createTextNode('Our defence from the video tagging: which schemes worked, how the opponents gave the disc back, who got the blocks, and who pulled.')]));
+  const header = el('div', { class: 'section-title-row' }, [el('span', {}, [document.createTextNode('Games')])]);
+  const content = el('div', {}, []);
+  header.appendChild(buildGameFilterDropdown(render));
+  section.appendChild(header);
+  section.appendChild(content);
+
+  function render(indices) {
+    content.innerHTML = '';
+    const events = filmEvents(indices);
+    const games = indices.map(i => REPORT.games[i]);
+    const anyDefTag = events.some(e => e.rec && ['def', 'block', 'oppTurn', 'pull'].includes(e.ev.kind));
+    if (!anyDefTag) {
+      content.appendChild(el('p', { class: 'pitch-caption' }, [document.createTextNode('Nothing defensive is tagged in these games yet: defensive schemes, block types, opponent turnovers and pulls all show here once they are.')]));
+      return;
+    }
+    const h2 = t => content.appendChild(el('h2', { class: 'section-title' }, [document.createTextNode(t)]));
+    const cap = t => content.appendChild(el('p', { class: 'pitch-caption' }, [document.createTextNode(t)]));
+
+    // ---- schemes ----
+    const points = [];
+    indices.forEach(gi => (REPORT.games[gi].points || []).forEach(pt => points.push({ gameIndex: gi, point: pt })));
+    const d = defenseBySchemeFor(points);
+    if (d.tagged || d.oppTimeouts.n) {
+      h2('Schemes');
+      cap('Each opponent possession tagged with the defence we played: how many we stopped (it ended in a turnover) and how many they scored on.');
+      const order = defSchemesInUse();
+      const rows = [...d.byScheme.entries()].sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0])).map(([sc, t]) => ({
+        cells: [sc, t.n, t.stops, t.n - t.stops, fmtPct(filmPct(t.stops, t.n))] }));
+      rows.push({ cls: 'film-foot', cells: ['Not tagged', d.possessions - d.tagged, '', '', ''] });
+      if (d.oppTimeouts.n) rows.push({ cls: 'film-foot', cells: ['After they called a timeout', d.oppTimeouts.n, d.oppTimeouts.stops, d.oppTimeouts.n - d.oppTimeouts.stops, fmtPct(filmPct(d.oppTimeouts.stops, d.oppTimeouts.n))] });
+      content.appendChild(filmTable(['Scheme', 'Possessions', 'Stopped', 'They scored', 'Stop rate'], rows));
+    }
+
+    // ---- the opponents' turnovers ----
+    const blocks = events.filter(e => e.ev.kind === 'block');
+    const unforced = events.filter(e => e.ev.kind === 'oppTurn');
+    if (blocks.length || unforced.length) {
+      h2('How they gave it back');
+      cap(`${blocks.length + unforced.length} opponent turnovers: ${blocks.length} forced (our blocks) and ${unforced.length} unforced.`);
+      const pies = buildTurnoverTypeCharts(games, { only: 'theirs', theirLabel: 'Opponents’ turnovers' });
+      if (pies) content.appendChild(pies);
+    }
+
+    // ---- blocks by player ----
+    if (blocks.length) {
+      h2('Blocks by player');
+      const types = BLOCK_VOCAB.type.filter(t => blocks.some(e => e.rec && e.rec.type === t));
+      const byPlayer = new Map();
+      blocks.forEach(e => {
+        const who = e.ev.item.player || 'Unknown';
+        const row = byPlayer.get(who) || { total: 0, untagged: 0, types: new Map() };
+        row.total++;
+        if (e.rec && e.rec.type) row.types.set(e.rec.type, (row.types.get(e.rec.type) || 0) + 1); else row.untagged++;
+        byPlayer.set(who, row);
+      });
+      const rows = [...byPlayer.entries()].sort((a, b) => b[1].total - a[1].total).map(([who, r]) => ({
+        cells: [who].concat(types.map(t => r.types.get(t) || ''), [r.untagged || '', r.total]) }));
+      content.appendChild(filmTable(['Player'].concat(types, ['Not tagged', 'Total']), rows));
+    }
+
+    // ---- pulls ----
+    const pulls = events.filter(e => e.ev.kind === 'pull' && e.rec);
+    if (pulls.length) {
+      h2('Pullers');
+      cap('Tagged pulls by who pulled: how many went out of bounds, and how often we went on to break (score that point).');
+      const byPuller = new Map();
+      pulls.forEach(e => {
+        const who = e.rec.puller || 'Puller not tagged';
+        const r = byPuller.get(who) || { n: 0, oob: 0, breaks: 0 };
+        r.n++;
+        if (e.rec.outOfBounds) r.oob++;
+        if (e.pt.result === 1) r.breaks++;
+        byPuller.set(who, r);
+      });
+      const rows = [...byPuller.entries()].sort((a, b) => b[1].n - a[1].n).map(([who, r]) => ({
+        cells: [who, r.n, r.n - r.oob, r.oob, fmtPct(filmPct(r.oob, r.n)), r.breaks, fmtPct(filmPct(r.breaks, r.n))] }));
+      content.appendChild(filmTable(['Puller', 'Pulls', 'In bounds', 'Out of bounds', 'OB rate', 'Breaks', 'Break rate'], rows));
+    }
+  }
+  render(REPORT.games.map((g, i) => i));
+  return section;
+}
+
+// ---------- My clips (Team Report): one player's film ----------
+// Every tagged moment a player is in -- their throws, catches, blocks and
+// pulls -- each linked to that moment in the game's video.
+const MY_CLIP_ROLES = [
+  { key: 'all', label: 'All' },
+  { key: 'throw', label: 'Throws' },
+  { key: 'catch', label: 'Catches' },
+  { key: 'block', label: 'Blocks' },
+  { key: 'pull', label: 'Pulls' },
+];
+function playerClips(name, gameIndices) {
+  const out = [];
+  filmEvents(gameIndices).forEach(e => {
+    if (!e.rec || e.rec.timestamp == null) return;
+    const ev = e.ev, p = ev.item;
+    const tags = filmEventDescriptor(ev, e.rec).tags || [];
+    const base = { gi: e.gi, game: e.game, pt: e.pt, ts: e.rec.timestamp, tags };
+    if (ev.kind === 'pass' && p.thrower === name) out.push(Object.assign({ role: 'throw', what: `Throw to ${p.receiver || '?'} · ${passOutcomeWord(p)}` }, base));
+    if (ev.kind === 'pass' && p.receiver === name) out.push(Object.assign({ role: 'catch', what: `From ${p.thrower || '?'} · ${passOutcomeWord(p)}` }, base));
+    if (ev.kind === 'block' && p.player === name) out.push(Object.assign({ role: 'block', what: 'Block' }, base));
+    if (ev.kind === 'pull' && e.rec.puller === name) out.push(Object.assign({ role: 'pull', what: 'Pull' }, base));
+  });
+  return out;
+}
+function buildMyClipsSection() {
+  const section = el('section', { class: 'view', id: 'my-clips' }, []);
+  section.appendChild(el('p', { class: 'eyebrow' }, [document.createTextNode('My clips')]));
+  section.appendChild(el('p', { class: 'hero-sub' }, [document.createTextNode('Pick a player to see every tagged moment they’re in — throws, catches, blocks and pulls — each opening the game video right there.')]));
+  const names = allPlayerNames();
+  let player = names[0] || '';
+  let role = 'all';
+  let games = REPORT.games.map((g, i) => i);
+  const header = el('div', { class: 'section-title-row' }, [el('span', {}, [document.createTextNode('Player')])]);
+  const controls = el('div', { class: 'controls-row' }, []);
+  const playerSel = el('select', { class: 'de-select', 'aria-label': 'Player' }, names.map(n => el('option', { value: n }, [document.createTextNode(n)])));
+  playerSel.addEventListener('change', () => { player = playerSel.value; render(); });
+  controls.appendChild(playerSel);
+  controls.appendChild(buildSegToggle(MY_CLIP_ROLES, (k) => { role = k; render(); }, role));
+  controls.appendChild(buildGameFilterDropdown((idx) => { games = idx; render(); }));
+  header.appendChild(controls);
+  section.appendChild(header);
+  const content = el('div', {}, []);
+  section.appendChild(content);
+
+  function render() {
+    content.innerHTML = '';
+    const all = playerClips(player, games);
+    const clips = role === 'all' ? all : all.filter(c => c.role === role);
+    const counts = MY_CLIP_ROLES.slice(1).map(r => all.filter(c => c.role === r.key).length + ' ' + r.label.toLowerCase()).join(' · ');
+    content.appendChild(el('p', { class: 'pitch-caption' }, [document.createTextNode(all.length
+      ? `${all.length} tagged moments with a video timestamp: ${counts}.`
+      : 'No tagged moments with a video timestamp for ' + player + ' in these games yet.')]));
+    let lastGame = -1;
+    let list = null;
+    clips.forEach(c => {
+      if (c.gi !== lastGame) {
+        lastGame = c.gi;
+        content.appendChild(el('h3', { class: 'film-subtitle' }, [document.createTextNode(`vs ${c.game.opponent} · ${c.game.dateDisplay}`)]));
+        list = el('ul', { class: 'my-clips' }, []);
+        content.appendChild(list);
+      }
+      list.appendChild(el('li', {}, [
+        filmClipEl(c.gi, c.ts, `Pt ${c.pt.number} · ${c.what}`),
+        c.tags.length ? el('span', { class: 'my-clip-tags' }, [document.createTextNode(c.tags.join(' · '))]) : null,
+      ]));
+    });
+  }
+  render();
+  return section;
+}
+
 // ---------- Advanced Stats: the "EDGE" goal-equivalent / efficiency family ----------
 // Implements Table 1 of the BBSM EDGE framework (minus EDGE-PM). The framework
 // is league-relative; this report has only one team, so:
@@ -10679,6 +11116,8 @@ function init() {
   mountRebuildableView(() => buildLineAnalysisSection('analysis'));
   mountRebuildableView(buildThrowerReceiverSection);
   mountRebuildableView(buildFieldAnalysisSection);
+  mountRebuildableView(buildDefenseSection);
+  mountRebuildableView(buildMyClipsSection);
   mountRebuildableView(buildGenderAnalysisSection);
   mountRebuildableView(buildTimeSeriesSection);
   mountRebuildableView(buildAdvancedStatsSection);

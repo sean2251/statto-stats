@@ -1214,6 +1214,53 @@ class BrowserTests(unittest.TestCase):
         self.assertEqual(self.errors, [])
 
 
+    def test_9g_film_analysis_tabs(self):
+        """Tags feed the film sections: a player's throwing profile, the
+        Season's turnover trend, the Defense tab and My clips."""
+        api = Api(self.base, "other-club").login("editor", EDITOR_PW)
+        ctx = self.context()
+        ed = self.sign_in(ctx, "editor", EDITOR_PW, go="/editor", team="other-club")
+        self.setup_rows(ed)
+        pick = ed.evaluate("""() => {
+            for (let gi = 0; gi < REPORT.games.length; gi++) {
+                const evs = StattoStats.gameEvents(REPORT.games[gi]);
+                const pa = evs.find(e => e.kind === 'pass' && !e.item.turnover && e.item.thrower);
+                const pull = evs.find(e => e.kind === 'pull');
+                const def = evs.find(e => e.kind === 'def');
+                if (pa && pull && def) return { game: REPORT.games[gi].uuid, pass: pa.uuid, thrower: pa.item.thrower,
+                    pull: pull.uuid, def: def.uuid };
+            }
+            return null; }""")
+        self.assertIsNotNone(pick)
+        api.call("POST", "/api/tags", {"changes": [
+            {"kind": "passes", "key": pick["pass"], "game": pick["game"], "data": {"hand": "Backhand", "timestamp": 75}},
+            {"kind": "points", "key": pick["pull"], "game": pick["game"], "data": {"puller": pick["thrower"], "outOfBounds": True, "timestamp": 30}},
+            {"kind": "points", "key": pick["def"], "game": pick["game"], "data": {"defScheme": "Person"}}]})
+        ed.reload()
+        self.setup_rows(ed)
+        ed.click("text=Publish Team Report")
+        ed.wait_for_selector(".app-dialog >> text=Team Report published")
+        view = ctx.new_page()
+        view.goto(self.base + "/t/other-club/view")
+        view.wait_for_selector("#topnav button.tab")
+        view.evaluate("() => showView('defense')")
+        view.wait_for_selector("#defense .film-table")
+        text = view.text_content("#defense")
+        self.assertIn("Schemes", text)
+        self.assertIn("Person", text)
+        self.assertIn("Pullers", text)
+        self.assertIn(pick["thrower"], text)
+        view.evaluate("() => showView('my-clips')")
+        view.wait_for_selector("#my-clips select")
+        view.select_option("#my-clips select", pick["thrower"])
+        view.wait_for_selector("#my-clips .my-clips li")
+        clips = view.text_content("#my-clips")
+        self.assertIn("Throw to", clips)
+        self.assertIn("Pull", clips)
+        self.assertIn("Backhand", clips)
+        ctx.close()
+        self.assertEqual(self.errors, [])
+
 def passes_by_game(statto):
     """{opponent: [{uuid, game}]} for every pass in a .statto export."""
     import io
