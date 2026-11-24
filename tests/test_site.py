@@ -1172,6 +1172,47 @@ class BrowserTests(unittest.TestCase):
         ctx.close()
         self.assertEqual(self.errors, [])
 
+    def test_9f_turnover_pies_on_game_pages(self):
+        """A game page in the Team Report shows our and the opponent's
+        turnovers by tagged type, once any of them is tagged."""
+        api = Api(self.base, "other-club").login("editor", EDITOR_PW)
+        ctx = self.context()
+        ed = self.sign_in(ctx, "editor", EDITOR_PW, go="/editor", team="other-club")
+        self.setup_rows(ed)
+        pick = ed.evaluate("""() => {
+            for (let gi = 0; gi < REPORT.games.length; gi++) {
+                const evs = StattoStats.gameEvents(REPORT.games[gi]);
+                const to = evs.find(e => e.kind === 'pass' && e.item.turnover);
+                const bl = evs.find(e => e.kind === 'block');
+                if (to && bl) return { gi, game: REPORT.games[gi].uuid, to: to.uuid, bl: bl.uuid,
+                    turnovers: evs.filter(e => e.kind === 'pass' && e.item.turnover).length };
+            }
+            return null; }""")
+        self.assertIsNotNone(pick)
+        api.call("POST", "/api/tags", {"changes": [
+            {"kind": "passes", "key": pick["to"], "game": pick["game"], "data": {"turnoverReason": ["Drop", "Miscommunication"]}},
+            {"kind": "blocks", "key": pick["bl"], "game": pick["game"], "data": {"type": "Sky/boxout"}}]})
+        ed.reload()
+        self.setup_rows(ed)
+        ed.click("text=Publish Team Report")
+        ed.wait_for_selector(".app-dialog >> text=Team Report published")
+        view = ctx.new_page()
+        view.goto(self.base + "/t/other-club/view")
+        view.wait_for_selector("#topnav button.tab")
+        gid = "game-%d" % pick["gi"]
+        view.evaluate("id => showView(id)", gid)
+        cards = "#%s .pie-card" % gid
+        view.wait_for_selector(cards)
+        ours = view.eval_on_selector_all(cards + " >> nth=0 >> .pie-legend .pie-label", "e => e.map(x => x.textContent)")
+        self.assertIn("Drop", ours)
+        self.assertIn("Miscommunication", ours)
+        if pick["turnovers"] > 1:
+            self.assertIn("Not tagged", ours)
+        self.assertEqual(view.text_content(cards + " >> nth=0 >> .pie-center-big"), str(pick["turnovers"]))
+        self.assertIn("Sky/boxout", view.eval_on_selector_all(cards + " >> nth=1 >> .pie-legend .pie-label", "e => e.map(x => x.textContent)"))
+        ctx.close()
+        self.assertEqual(self.errors, [])
+
 
 def passes_by_game(statto):
     """{opponent: [{uuid, game}]} for every pass in a .statto export."""

@@ -195,9 +195,17 @@ published Team Report, and is in the Raw Data JSON export (`roster[].handedness`
 - Score, opponent, and result
 - A **▶ Watch game** button, if you've added a video link for this game on
   the [Set up](#set-up----season-setup) tab
-Top to bottom: **Summary Statistics → Scoring Efficiency → Point
-differential → the point log / field diagram / tagged events columns →
-Clutch Efficiency → Box score.**
+Top to bottom: **Summary Statistics → Scoring Efficiency → Turnovers by
+type → Point differential → the point log / field diagram / tagged events
+columns → Clutch Efficiency → Box score.**
+
+- **Turnovers by type** (once any of the game's turnovers is tagged): two
+  donut charts. *Our turnovers* splits them by tagged turnover reason; a
+  turnover can have more than one reason, so its slices count reasons. *Their
+  turnovers* counts each of the opponent's turnovers once: our blocks by block
+  type and their unforced errors by type. The five most common types each get
+  a slice, the rest fold into Other, and untagged ones are a hatched **Not
+  tagged** slice. Hover a slice for its count.
 
 - A **Combined / Offensive points / Defensive points** toggle over the core
   box stats (completions, hucks, blocks, opponent turnovers, red-zone

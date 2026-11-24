@@ -1,4 +1,7 @@
   :root {
+    /* pie slices (validated categorical slots 1-5, dark surface) */
+    --pie-1: #3987e5; --pie-2: #d95926; --pie-3: #199e70; --pie-4: #c98500; --pie-5: #d55181;
+    --pie-other: #75746f; --pie-none: #3a3b3f; --pie-none-line: #55565b;
     /* neutral chrome -- dark theme (default) */
     --ink: #17181A;
     --ink-soft: #212226;
@@ -23,6 +26,9 @@
     --pc5: #E06A85; --pc6: #35A9BA; --pc7: #A9A94A;
   }
   [data-theme="light"] {
+    /* pie slices (validated categorical slots 1-5, light surface) */
+    --pie-1: #2a78d6; --pie-2: #eb6834; --pie-3: #1baf7a; --pie-4: #eda100; --pie-5: #e87ba4;
+    --pie-other: #9a9994; --pie-none: #e4e3de; --pie-none-line: #c3c2b7;
     --ink: #F7F7F6;
     --ink-soft: #FFFFFF;
     --ink-rgb: 247,247,246;
@@ -1984,3 +1990,20 @@
     .site-brand, .site-teams { flex: 1; min-width: 0; }
     .site-links { order: 3; flex-basis: 100%; overflow-x: auto; flex-wrap: nowrap; }
 }
+
+/* ---------- Turnovers by type (game page): two donuts with legends ---------- */
+.pie-pair { display: flex; flex-wrap: wrap; gap: 16px; margin: 8px 0 8px; }
+.pie-card { flex: 1 1 300px; background: var(--ink-soft); border: 1px solid rgba(var(--chalk-rgb), 0.1); border-radius: 12px; padding: 14px 16px; display: flex; flex-wrap: wrap; gap: 10px 20px; align-items: center; align-content: flex-start; }
+.pie-title { flex-basis: 100%; font-weight: 700; font-size: 14px; color: var(--chalk); }
+.pie-svg { flex: none; }
+.pie-slice { stroke: var(--ink-soft); stroke-width: 2px; }
+.pie-slice:hover { opacity: 0.85; }
+.pie-center-big { font-size: 26px; font-weight: 800; fill: var(--chalk); font-family: var(--sans); }
+.pie-center-small { font-size: 11px; fill: var(--chalk-dim); font-family: var(--sans); text-transform: uppercase; letter-spacing: 0.06em; }
+.pie-legend { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; flex: 1 1 140px; min-width: 0; }
+.pie-legend li { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--chalk); }
+.pie-swatch { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+.pie-swatch.hatch { background: repeating-linear-gradient(45deg, var(--pie-none) 0 3px, var(--pie-none-line) 3px 5px); }
+.pie-label { flex: 1; min-width: 0; }
+.pie-value { color: var(--chalk-dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pie-note { flex-basis: 100%; margin: 0; font-size: 11.5px; color: var(--chalk-dim); }

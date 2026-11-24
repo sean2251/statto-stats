@@ -2528,6 +2528,120 @@ function buildDiffChart(points) {
   return { svg, dotsByNumber };
 }
 
+// ---------- Turnovers by type (a game page, from the video tagging) ----------
+// Ours: each turnover pass's tagged reason(s) -- a turnover can have more than
+// one, so the slices count reasons and can add up to more than the turnovers.
+// Theirs: every opponent turnover once -- our blocks by block type, their
+// unforced errors by type. Untagged ones are a "Not tagged" slice.
+const PIE_MAX_NAMED = 5;
+function gameTurnoverBreakdown(game) {
+  const ann = loadAnnotations();
+  const ours = new Map(), theirs = new Map();
+  let ourTurnovers = 0, ourUntagged = 0, theirTurnovers = 0, theirUntagged = 0;
+  const add = (m, k) => m.set(k, (m.get(k) || 0) + 1);
+  (game.points || []).forEach(pt => {
+    buildPointEvents(pt).forEach(ev => {
+      const rec = annotationRecordFor(ann, ev);
+      if (ev.kind === 'pass' && ev.item.turnover) {
+        ourTurnovers++;
+        const reasons = rec && rec.turnoverReason ? [].concat(rec.turnoverReason).filter(Boolean) : [];
+        if (reasons.length) reasons.forEach(r => add(ours, r)); else ourUntagged++;
+      } else if (ev.kind === 'block') {
+        theirTurnovers++;
+        if (rec && rec.type) add(theirs, rec.type); else theirUntagged++;
+      } else if (ev.kind === 'oppTurn') {
+        theirTurnovers++;
+        if (rec && rec.oppTurnover) add(theirs, rec.oppTurnover); else theirUntagged++;
+      }
+    });
+  });
+  return {
+    ours: { total: ourTurnovers, counts: ours, untagged: ourUntagged, order: ANNOTATION_VOCAB.turnoverReason },
+    theirs: { total: theirTurnovers, counts: theirs, untagged: theirUntagged, order: BLOCK_VOCAB.type.concat(POINT_VOCAB.oppTurnover) },
+  };
+}
+// Slices for one pie: the most common categories (at most PIE_MAX_NAMED, each
+// with its own colour, assigned in the vocabulary's order so a pie's colours
+// never depend on rank), then "Other", then "Not tagged".
+function turnoverPieSlices(side) {
+  const named = [...side.counts.entries()].sort((a, b) => b[1] - a[1] || side.order.indexOf(a[0]) - side.order.indexOf(b[0]));
+  const shown = named.slice(0, PIE_MAX_NAMED).map(x => x[0]);
+  const ordered = side.order.filter(k => shown.includes(k)).concat(shown.filter(k => !side.order.includes(k)));
+  const slices = ordered.map((k, i) => ({ label: k, value: side.counts.get(k), color: 'var(--pie-' + (i + 1) + ')' }));
+  const other = named.slice(PIE_MAX_NAMED).reduce((n, x) => n + x[1], 0);
+  if (other) slices.push({ label: 'Other', value: other, color: 'var(--pie-other)' });
+  if (side.untagged) slices.push({ label: 'Not tagged', value: side.untagged, color: 'var(--pie-none)', hatch: true });
+  return slices;
+}
+function buildDonut(slices, centerBig, centerSmall, ariaLabel) {
+  const size = 168, r = 74, rIn = 48, c = size / 2;
+  const svg = svgEl('svg', { viewBox: `0 0 ${size} ${size}`, width: size, height: size, role: 'img', 'aria-label': ariaLabel, class: 'pie-svg' });
+  const total = slices.reduce((n, sl) => n + sl.value, 0);
+  let a0 = -Math.PI / 2;
+  const pt = (rad, a) => [c + rad * Math.cos(a), c + rad * Math.sin(a)];
+  slices.forEach(sl => {
+    const frac = sl.value / total;
+    const a1 = a0 + frac * 2 * Math.PI;
+    let d;
+    if (frac >= 0.9999) {
+      // A whole ring: two half-arcs (a single full arc doesn't draw).
+      d = `M ${c} ${c - r} A ${r} ${r} 0 1 1 ${c} ${c + r} A ${r} ${r} 0 1 1 ${c} ${c - r} M ${c} ${c - rIn} A ${rIn} ${rIn} 0 1 0 ${c} ${c + rIn} A ${rIn} ${rIn} 0 1 0 ${c} ${c - rIn} Z`;
+    } else {
+      const large = (a1 - a0) > Math.PI ? 1 : 0;
+      const [x0, y0] = pt(r, a0), [x1, y1] = pt(r, a1), [x2, y2] = pt(rIn, a1), [x3, y3] = pt(rIn, a0);
+      d = `M ${x0} ${y0} A ${r} ${r} 0 ${large} 1 ${x1} ${y1} L ${x2} ${y2} A ${rIn} ${rIn} 0 ${large} 0 ${x3} ${y3} Z`;
+    }
+    const path = svgEl('path', { d, fill: sl.hatch ? 'url(#pie-hatch)' : sl.color, class: 'pie-slice', 'fill-rule': 'evenodd' });
+    const t = svgEl('title', {});
+    t.textContent = `${sl.label}: ${sl.value} (${Math.round(100 * frac)}%)`;
+    path.appendChild(t);
+    svg.appendChild(path);
+    a0 = a1;
+  });
+  const big = svgEl('text', { x: c, y: c + 2, 'text-anchor': 'middle', class: 'pie-center-big' });
+  big.textContent = centerBig;
+  const small = svgEl('text', { x: c, y: c + 20, 'text-anchor': 'middle', class: 'pie-center-small' });
+  small.textContent = centerSmall;
+  svg.appendChild(big); svg.appendChild(small);
+  return svg;
+}
+// The two pies, side by side -- or null when none of the game's turnovers
+// has been tagged (a single "Not tagged" ring says nothing).
+function buildTurnoverTypeCharts(game) {
+  const b = gameTurnoverBreakdown(game);
+  if (!b.ours.counts.size && !b.theirs.counts.size) return null;
+  const wrap = el('div', { class: 'pie-pair' }, []);
+  // One hatch pattern for "Not tagged", shared by both pies on the page.
+  if (!document.getElementById('pie-hatch')) {
+    const defs = svgEl('svg', { width: 0, height: 0, style: 'position:absolute', 'aria-hidden': 'true' });
+    defs.innerHTML = '<defs><pattern id="pie-hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">' +
+      '<rect width="6" height="6" fill="var(--pie-none)"/><line x1="0" y1="0" x2="0" y2="6" stroke="var(--pie-none-line)" stroke-width="2"/></pattern></defs>';
+    wrap.appendChild(defs);
+  }
+  [['ours', 'Our turnovers', 'turnovers', 'reasons'], ['theirs', game.opponent + '’s turnovers', 'turnovers', null]].forEach(([key, title, word, unit]) => {
+    const side = b[key];
+    const card = el('div', { class: 'pie-card' }, [el('div', { class: 'pie-title' }, [document.createTextNode(title)])]);
+    if (!side.total) {
+      card.appendChild(el('p', { class: 'pitch-caption' }, [document.createTextNode('None this game.')]));
+    } else if (!side.counts.size) {
+      card.appendChild(el('p', { class: 'pitch-caption' }, [document.createTextNode(side.total + ' ' + word + ', none tagged yet.')]));
+    } else {
+      const slices = turnoverPieSlices(side);
+      const sum = slices.reduce((n, sl) => n + sl.value, 0);
+      card.appendChild(buildDonut(slices, String(side.total), word, title + ': ' + slices.map(sl => sl.label + ' ' + sl.value).join(', ')));
+      const legend = el('ul', { class: 'pie-legend' }, slices.map(sl => el('li', {}, [
+        el('span', { class: 'pie-swatch' + (sl.hatch ? ' hatch' : ''), style: sl.hatch ? '' : 'background:' + sl.color }, []),
+        el('span', { class: 'pie-label' }, [document.createTextNode(sl.label)]),
+        el('span', { class: 'pie-value' }, [document.createTextNode(sl.value + ' · ' + Math.round(100 * sl.value / sum) + '%')]),
+      ])));
+      card.appendChild(legend);
+      if (unit && sum !== side.total) card.appendChild(el('p', { class: 'pie-note' }, [document.createTextNode('A turnover can have more than one reason, so the slices count ' + unit + ' (' + sum + '), not turnovers.')]));
+    }
+    wrap.appendChild(card);
+  });
+  return wrap;
+}
+
 function buildGameSection(game, index) {
   const section = el('section', { class: 'view', id: 'game-' + index }, []);
   const eyebrow = el('p', { class: 'eyebrow' }, [document.createTextNode(game.dateDisplay + ' \u00b7 ' + (game.result === 'W' ? 'Win' : game.result === 'L' ? 'Loss' : 'Tie'))]);
@@ -2564,6 +2678,14 @@ function buildGameSection(game, index) {
 
   section.appendChild(el('h2', { class: 'section-title' }, [document.createTextNode('Scoring Efficiency')]));
   section.appendChild(buildScoringEfficiencyWidget(game.summary.scoringEfficiency));
+
+  // How the game's turnovers happened, from the video tagging (shown once
+  // any of them is tagged).
+  const turnoverCharts = buildTurnoverTypeCharts(game);
+  if (turnoverCharts) {
+    section.appendChild(el('h2', { class: 'section-title' }, [document.createTextNode('Turnovers by type')]));
+    section.appendChild(turnoverCharts);
+  }
 
   section.appendChild(el('h2', { class: 'section-title' }, [document.createTextNode('Point differential')]));
   const diffChart = buildDiffChart(game.points);
