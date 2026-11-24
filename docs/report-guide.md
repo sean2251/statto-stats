@@ -126,7 +126,9 @@ richer, queryable film dataset on top of the raw Statto data.
 - **Out of timeout**, on a pass, marks it as the first throw after a timeout
   we called (click again to clear). It shows with the pass's tags, can be
   filtered on in Query (Out of timeout: Yes / No), and is in the export as
-  `filmTags.outOfTimeout`.
+  `filmTags.outOfTimeout`. On a defensive possession, **Opponent called timeout**
+  marks that they called a timeout during it (filterable too; in the export
+  as `oppTimeout` on that possession).
 - **Edit**, on a pass or block, corrects the thrower and/or receiver, or who
   got the D, when Statto has it wrong. The panel shows the corrected names
   (and what Statto had); the published Team Report is rebuilt with the

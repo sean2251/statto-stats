@@ -7105,7 +7105,7 @@ const RAW_DATA_NOTES = [
   'roster (top level) lists every player who appears in a box score this season. Each entry carries their mixed-line gender designation -- gender is "WMP" (women-matching player) or "MMP" (men-matching player), with genderCode 1 or 0 respectively (both null if the player has no gender set) -- plus hasPhoto and photoFile, and handedness ("Right" or "Left" -- the hand they throw with, as set by the admin; null if not set). Photos are NOT embedded here — they travel as a separate "player photos" ZIP downloaded from the same Raw Data tab, in which each file is named exactly as photoFile says (e.g. photos/sean_mcsweeney.png). If you were given that ZIP alongside this file, use photoFile to match a face to a name; if you weren’t, ignore it — nothing else depends on it.',
   'pullEvents (top level, separate from games) is a manually video-tagged list, one entry per defensive point that has been tagged: who pulled and where our pull landed. puller is the player name (or null if untagged). landX/landY are 0-1 field fractions in the same coordinate system as passes (null when outOfBounds is true, or when a spot wasn’t marked); outOfBounds=true means the pull went out of bounds; then tapInX/tapInY is where the disc was brought into play (tapInX is always 0.5, the middle of the field’s width; null if not marked). It is only present for points a tagger has marked, so it may be empty or cover only some defensive points.',
   'opponentTurnoverEvents (top level) is the other manually video-tagged list: opponent turnovers that were NOT one of our blocks (those are in games[].points[].blocks). Statto records nothing for them, so each is inferred as an opponent possession we won the disc back from, identified by pointNumber + opponentPossession (their n-th offensive possession that point); type is one of Huck turnover / Throwing error / Receiver error, or null if untagged. Like pullEvents, only tagged ones appear.',
-  'Film tags: a pass or block in games[].points[] may carry a "filmTags" object when someone has video-tagged it. On a pass: hand (backhand/forehand/etc.), release, distance, stall (Low/Mid/High), catch, highlight, turnoverReason (an ARRAY -- a turnover can have several causes), outOfTimeout (true when it was the first throw after a timeout we called), plus timestamp (seconds into that game’s video) and notes. On a block: type, highlight, timestamp, notes. A point may also carry filmTags: defScheme (the defence called), pull (where our pull landed -- puller, landX/landY 0-1, or outOfBounds with tapInX/tapInY where it was tapped in), defensivePossessions[] (each with defScheme), and opponentTurnovers[] (each with a type). Every field is optional and tags exist only where a tagger added them, so most passes have none. (pullEvents/opponentTurnoverEvents above are flattened, game-context copies of the same point-level tags, handy for "list every tagged pull".)',
+  'Film tags: a pass or block in games[].points[] may carry a "filmTags" object when someone has video-tagged it. On a pass: hand (backhand/forehand/etc.), release, distance, stall (Low/Mid/High), catch, highlight, turnoverReason (an ARRAY -- a turnover can have several causes), outOfTimeout (true when it was the first throw after a timeout we called), plus timestamp (seconds into that game’s video) and notes. On a block: type, highlight, timestamp, notes. A point may also carry filmTags: defScheme (the defence called), pull (where our pull landed -- puller, landX/landY 0-1, or outOfBounds with tapInX/tapInY where it was tapped in), defensivePossessions[] (each with defScheme, and oppTimeout true if the opponent called a timeout during it), and opponentTurnovers[] (each with a type). Every field is optional and tags exist only where a tagger added them, so most passes have none. (pullEvents/opponentTurnoverEvents above are flattened, game-context copies of the same point-level tags, handy for "list every tagged pull".)',
   'videoLinks (top level) maps each selected game to its YouTube URL. To deep-link a tagged moment, append the tag’s timestamp: `<url>&t=<timestamp>s`.',
   'lines (top level) is the user’s curated line groupings (e.g. "O line", "D line"): each has a name, optional tournament, pointCount, the points it covers (gameIndex + pointNumber), and a roster listing how many of the line’s points each player was on (pctOfLinePoints). Lines are a season-level curation and are deliberately NOT filtered by the selected games.',
   'tournaments (top level) groups the selected games the way the report does -- custom names if the user set them, else auto-detected -- so questions can be scoped to an event ("at Regionals...").',
@@ -7849,7 +7849,12 @@ function filmTagValues(rec, keys) {
   return out;
 }
 // Yes/no tags, stored as true when set; shown by their label.
-const TAG_FLAG_LABELS = { outOfTimeout: 'Out of timeout' };
+const TAG_FLAG_LABELS = { outOfTimeout: 'Out of timeout', oppTimeout: 'Opponent called timeout' };
+// The tagging panel's timeout button, per kind of event.
+const TIMEOUT_FLAGS = {
+  pass: { key: 'outOfTimeout', note: 'The first throw after a timeout we called.' },
+  def: { key: 'oppTimeout', note: 'They called a timeout during this possession.' },
+};
 const FILM_PASS_TAG_KEYS = ['hand', 'release', 'distance', 'stall', 'catch', 'highlight', 'turnoverReason', 'outOfTimeout'];
 
 // How one tagged event reads in the film strip: a short kind label, who/what it
@@ -7868,7 +7873,7 @@ function filmEventDescriptor(ev, rec) {
     return { kind: 'Pull', main: rec.puller || 'Pull', tags: landing ? [landing] : [] };
   }
   if (ev.kind === 'def') {
-    return { kind: 'Defence', main: `Their possession ${ev.defN}`, tags: filmTagValues(rec, ['defScheme']) };
+    return { kind: 'Defence', main: `Their possession ${ev.defN}`, tags: filmTagValues(rec, ['defScheme', 'oppTimeout']) };
   }
   return { kind: 'Opp TO', main: `Their possession ${ev.defN}`, tags: filmTagValues(rec, ['oppTurnover']) };
 }
@@ -7904,7 +7909,7 @@ const QUERY_KINDS = {
   pass: { label: 'Passes', word: 'passes', filterKeys: ['hand', 'release', 'distance', 'stall', 'catch', 'highlight', 'turnoverReason', 'outOfTimeout'] },
   block: { label: 'Blocks', word: 'blocks', filterKeys: ['type', 'highlight'] },
   pull: { label: 'Pulls', word: 'pulls', filterKeys: ['landing', 'puller'] },
-  def: { label: 'D-possessions', word: 'defensive possessions', filterKeys: ['defScheme'] },
+  def: { label: 'D-possessions', word: 'defensive possessions', filterKeys: ['defScheme', 'oppTimeout'] },
   oppTurn: { label: 'Opp turnovers', word: 'opponent turnovers', filterKeys: ['oppTurnover'] },
   // Points is a synthesized kind: rather than filtering tagged events, it lists
   // the start timestamp of each offensive/defensive possession in points the
@@ -8008,6 +8013,7 @@ function buildAnnotationQueryPane() {
       filterRow.appendChild(dropdown('Puller', allPlayerNames(), 'puller'));
     } else if (showKind === 'def') {
       filterRow.appendChild(dropdown('Defensive scheme', defSchemesInUse(), 'defScheme'));
+      filterRow.appendChild(dropdown('Opponent called timeout', ['Yes', 'No'], 'oppTimeout'));
     } else if (showKind === 'oppTurn') {
       filterRow.appendChild(dropdown('Turnover type', POINT_VOCAB.oppTurnover, 'oppTurnover'));
     } else if (showKind === 'points') {
@@ -8140,7 +8146,7 @@ function buildAnnotationQueryPane() {
         return filters[k] === 'Out-of-bounds' ? !!a.outOfBounds : (!a.outOfBounds && a.landX != null);
       }
       // A yes/no tag: set (true) or not.
-      if (k === 'outOfTimeout') return !!a[k] === (filters[k] === 'Yes');
+      if (k in TAG_FLAG_LABELS) return !!a[k] === (filters[k] === 'Yes');
       // turnoverReason can hold several values at once -- match if the
       // selected reason is one of them (also accepts an older single-string
       // tag from before multi-select).
@@ -8155,7 +8161,7 @@ function buildAnnotationQueryPane() {
     // Every stored tag value worth showing, minus the ones already spelled out
     // in the row's own label. (Empty for Points rows, which carry no tags.)
     const tags = [];
-    ['hand', 'release', 'distance', 'stall', 'catch', 'highlight', 'turnoverReason', 'outOfTimeout', 'type', 'defScheme', 'oppTurnover'].forEach(k => {
+    ['hand', 'release', 'distance', 'stall', 'catch', 'highlight', 'turnoverReason', 'outOfTimeout', 'type', 'defScheme', 'oppTimeout', 'oppTurnover'].forEach(k => {
       const v = r.a[k];
       if (Array.isArray(v)) { if (v.length) tags.push(v.join(' + ')); }
       else if (v === true) tags.push(TAG_FLAG_LABELS[k] || k);
@@ -8695,14 +8701,21 @@ function buildDataEditorSection(viewer, tagOnlyGame) {
       return;
     }
     renderPanelBody();
-    // "Out of timeout": this is the first throw after a timeout we called.
-    if (step && !viewer && step.kind === 'pass') {
-      const on = !!(stepRecord(step) || {}).outOfTimeout;
+    // Yes/no timeout tags: on a pass, "Out of timeout" (the first throw after
+    // a timeout we called); on a defensive possession, "Opponent called
+    // timeout" (they called one during it).
+    const flag = step && !viewer && TIMEOUT_FLAGS[step.kind];
+    if (flag) {
+      const on = !!(stepRecord(step) || {})[flag.key];
       const tbtn = el('button', { class: 'pill-btn de-flag-btn' + (on ? ' active' : ''), type: 'button', 'aria-pressed': on ? 'true' : 'false',
-        title: on ? 'Click again to clear' : 'The first throw coming out of a timeout we called' }, [document.createTextNode(on ? '✓ Out of timeout' : 'Out of timeout')]);
-      tbtn.addEventListener('click', () => { setField('outOfTimeout', on ? undefined : true); render(); });
+        title: on ? 'Click again to clear' : flag.note }, [document.createTextNode((on ? '✓ ' : '') + TAG_FLAG_LABELS[flag.key])]);
+      tbtn.addEventListener('click', () => {
+        if (step.kind === 'pass') setField(flag.key, on ? undefined : true);
+        else setPointField(step.uuid, flag.key, on ? undefined : true);
+        render();
+      });
       panel.appendChild(el('div', { class: 'controls-row de-flag-row' }, [tbtn,
-        el('span', { class: 'de-field-note' }, [document.createTextNode('The first throw after a timeout we called.')])]));
+        el('span', { class: 'de-field-note' }, [document.createTextNode(flag.note)])]));
     }
     if (step && !viewer) {
       const btn = el('button', { class: 'pill-btn de-ignore-btn', type: 'button', title: 'Leave this event out of every stat — e.g. a pass Statto needed only to make the point add up' }, [document.createTextNode('Ignore this event')]);

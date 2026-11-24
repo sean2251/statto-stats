@@ -1141,6 +1141,37 @@ class BrowserTests(unittest.TestCase):
         ctx.close()
         self.assertEqual(self.errors, [])
 
+    def test_9e_opponent_called_timeout(self):
+        """A defensive possession can be tagged "Opponent called timeout"."""
+        api = Api(self.base, "other-club").login("editor", EDITOR_PW)
+        ctx = self.context()
+        page = self.sign_in(ctx, "tagger", "other-club-tagger", "Ivy", team="other-club")
+        page.wait_for_selector(".game")
+        page.click(".game >> nth=0 >> .actions a.btn")
+        page.wait_for_selector(".de-tagged-count")
+        target = page.evaluate("""() => {
+            const evs = StattoStats.gameEvents(REPORT.games[TAGONLY_GAME]);
+            const i = evs.findIndex(e => e.kind === 'def');
+            return { i, uuid: evs[i].uuid }; }""")
+        for _ in range(target["i"]):
+            page.keyboard.press("ArrowRight")
+        self.assertTrue(page.text_content(".de-panel-title").startswith("Defensive possession"))
+        # Above the ignore button.
+        self.assertEqual(page.eval_on_selector_all(".de-flag-row, .de-ignore-row", "e => e.map(x => x.className)"),
+                         ["controls-row de-flag-row", "controls-row de-ignore-row"])
+
+        def server_rec():
+            tags = {c["key"]: c["data"] for c in api.call("GET", "/api/tags?since=0")[1]["changes"] if c["kind"] == "points"}
+            return tags.get(target["uuid"]) or {}
+        page.click("button:has-text('Opponent called timeout')")
+        page.wait_for_selector("button.de-flag-btn[aria-pressed=true]")
+        wait_until(lambda: server_rec().get("oppTimeout") is True, message="opponent timeout saved")
+        self.assertIn("Opponent called timeout", page.evaluate("k => filmTagValues(loadAnnotations().points[k], ['defScheme', 'oppTimeout'])", target["uuid"]))
+        page.click("button.de-flag-btn")
+        wait_until(lambda: not server_rec().get("oppTimeout"), message="cleared")
+        ctx.close()
+        self.assertEqual(self.errors, [])
+
 
 def passes_by_game(statto):
     """{opponent: [{uuid, game}]} for every pass in a .statto export."""
