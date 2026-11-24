@@ -1276,14 +1276,75 @@ class BrowserTests(unittest.TestCase):
         view.evaluate("""() => { const a = document.createElement('a');
             a.href = 'https://www.youtube.com/watch?v=abcDEF12345&t=75s'; a.id = 'clip-test'; a.textContent = '▶ Pt 3 · Throw';
             document.querySelector('#my-clips').appendChild(a); }""")
-        view.route("https://www.youtube.com/**", lambda route: route.fulfill(body="", content_type="text/html"))
+        referers = []
+        def fake_youtube(route):
+            referers.append(route.request.headers.get("referer"))
+            route.fulfill(body="", content_type="text/html")
+        view.route("https://www.youtube.com/**", fake_youtube)
         view.click("#clip-test")
-        frame = view.wait_for_selector(".clip-player iframe")
-        self.assertIn("/embed/abcDEF12345?start=75&autoplay=1", frame.get_attribute("src"))
-        self.assertEqual(view.text_content(".clip-player .cropper-title"), "Pt 3 · Throw")
-        self.assertEqual(view.url.split("#")[0].endswith("/view"), True)
-        view.click(".clip-player button:has-text('Close')")
-        self.assertIsNone(view.query_selector(".clip-player"))
+        frame = view.wait_for_selector(".clip-dock iframe")
+        src = frame.get_attribute("src")
+        self.assertIn("/embed/abcDEF12345?start=75&autoplay=1", src)
+        self.assertIn("origin=" + urllib.parse.quote(self.base, safe=""), src)
+        self.assertEqual(frame.get_attribute("referrerpolicy"), "strict-origin-when-cross-origin")
+        self.assertEqual(view.text_content(".clip-dock-title"), "Pt 3 · Throw")
+        # YouTube refuses an embed that arrives without a Referer (Error 153).
+        wait_until(lambda: referers, message="the embed request")
+        self.assertTrue(referers[0] and referers[0].startswith(self.base), referers)
+        # Docked beside the links, not over them: the page makes room for it.
+        self.assertTrue(view.evaluate("() => document.body.classList.contains('clip-dock-open')"))
+        box = view.query_selector(".clip-dock").bounding_box()
+        main = view.query_selector("main").bounding_box()
+        self.assertLessEqual(main["x"] + main["width"], box["x"])
+        view.click(".clip-dock-close")
+        self.assertIsNone(view.query_selector(".clip-dock"))
+        ctx.close()
+        self.assertEqual(self.errors, [])
+
+    def test_9h_publishing_shows_progress_and_errors(self):
+        """Publish says what it's doing while it works, and an error stays on
+        screen instead of the button seeming to do nothing."""
+        ctx = self.context()
+        ed = self.sign_in(ctx, "editor", EDITOR_PW, go="/editor", team="other-club")
+        self.setup_rows(ed)
+        # Hold the upload so the progress is visible, then let it fail.
+        held = []
+        ed.route("**/api/report", lambda route: held.append(route) if route.request.method == "PUT" else route.continue_())
+        ed.click("text=Publish Team Report")
+        ed.wait_for_selector(".publish-dialog >> text=Publishing the Team Report")
+        wait_until(lambda: held, message="the upload")
+        self.assertIn("Uploading the Team Report", ed.text_content(".publish-dialog .publish-step"))
+        self.assertTrue(ed.is_disabled(".publish-dialog .cropper-actions button"))
+        held[0].fulfill(status=500, content_type="application/json", body=json.dumps({"error": "Something broke on the site."}))
+        ed.wait_for_selector(".publish-failed >> text=Couldn’t publish the Team Report")
+        self.assertIn("Something broke on the site.", ed.text_content(".publish-failed"))
+        self.assertIn("still sees the last Team Report", ed.text_content(".publish-failed"))
+        ed.click(".publish-failed button:has-text('Close')")
+        # And once the site answers, it publishes as before.
+        ed.unroute("**/api/report")
+        ed.click("text=Publish Team Report")
+        ed.wait_for_selector(".app-dialog >> text=Team Report published")
+        self.assertIsNone(ed.query_selector(".publish-dialog"))
+        ed.click(".app-dialog button:has-text('Done')")
+
+        # The preview's clips play too: its page has a real address, so the
+        # embed carries a Referer (a blob: preview sent none: Error 153).
+        with ctx.expect_page() as popup:
+            ed.click("text=Preview Team Report")
+        pv = popup.value
+        pv.wait_for_selector("#topnav button.tab")
+        referers = []
+        def fake_youtube(route):
+            referers.append(route.request.headers.get("referer"))
+            route.fulfill(body="", content_type="text/html")
+        pv.route("https://www.youtube.com/**", fake_youtube)
+        pv.evaluate("""() => { const a = document.createElement('a');
+            a.href = 'https://www.youtube.com/watch?v=abcDEF12345&t=12s'; a.id = 'clip-test'; a.textContent = '▶ clip';
+            document.querySelector('main').prepend(a); }""")
+        pv.click("#clip-test")
+        pv.wait_for_selector(".clip-dock iframe")
+        wait_until(lambda: referers, message="the preview's embed request")
+        self.assertTrue(referers[0] and referers[0].startswith(self.base), referers)
         ctx.close()
         self.assertEqual(self.errors, [])
 

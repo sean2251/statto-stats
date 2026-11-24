@@ -5108,8 +5108,8 @@ function publishForTeam() {
   teamReportHtml().then(html => downloadFile(html, slug(REPORT.teamName) + '_team_report.html', 'text/html;charset=utf-8;'));
 }
 // Preview opens the same read-only Team Report in a new tab, interactive, so the
-// editor can check it before publishing. (Blob URL inherits this page's origin,
-// so it shares localStorage -- fine, it's the same data, and the viewer never
+// editor can check it before publishing. (The tab shares this page's origin,
+// and so its localStorage -- fine, it's the same data, and the viewer never
 // writes anything.)
 function previewTeamReport() {
   // Open the tab now (a click may open one; a later promise may not), then
@@ -5118,9 +5118,11 @@ function previewTeamReport() {
   if (!win) { alert('Your browser blocked the preview tab — allow pop-ups for this page, or use Publish and open the file.'); return; }
   try { win.document.write('<p style="font-family:sans-serif;padding:24px">Building the Team Report…</p>'); } catch (e) {}
   teamReportHtml().then(html => {
-    const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
-    win.location.href = url;
-    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    // Written in, not opened as a blob: URL -- a blob: page sends no Referer,
+    // and YouTube refuses to play embedded clips without one (Error 153).
+    win.document.open();
+    win.document.write(html);
+    win.document.close();
   }).catch(err => {
     win.close();
     alert('Couldn’t open a preview here (' + err.message + ') — use Publish Team Report instead.');
@@ -5291,18 +5293,55 @@ function openDialog(title, bodyNodes, actions) {
 // mercy of YouTube's "resume where you left off": if you'd watched that game
 // before, it often starts where you stopped, not at the clip. An embedded
 // player always honours its start time, so a plain click on any such link
-// plays it here instead; Ctrl/⌘/Shift-click or middle-click still opens
-// YouTube in a new tab, and the player links there too.
+// plays it in a player docked at the right of the screen (the bottom, on a
+// phone), beside the links; the next click swaps the clip. Ctrl/⌘/Shift-click
+// or middle-click still opens YouTube in a new tab, and the player links there.
+//
+// YouTube refuses an embed it can't identify (Error 153) -- one that arrives
+// without a Referer. So the iframe asks for one explicitly and names this
+// page's origin; and the page itself must have a real https address, which is
+// why the preview is written into its tab rather than opened as a blob: URL
+// (blob: pages send no Referer at all).
 const CLIP_URL_RE = /^https:\/\/(?:www\.)?youtube\.com\/watch\?v=([A-Za-z0-9_-]+)&t=(\d+)(?:\.\d+)?s$/;
+function youtubeEmbedUrl(vid, secs, extra) {
+  const q = new URLSearchParams(Object.assign({ start: String(Math.max(0, Math.floor(secs || 0))), autoplay: '1', rel: '0', playsinline: '1' }, extra || {}));
+  if (/^https?:$/.test(location.protocol)) {
+    q.set('origin', location.origin);
+    q.set('widget_referrer', location.origin + location.pathname);
+  }
+  return `https://www.youtube.com/embed/${vid}?${q}`;
+}
+let clipDock = null;
+function closeClipPlayer() {
+  if (!clipDock) return;
+  clipDock.root.remove();
+  document.body.classList.remove('clip-dock-open');
+  document.removeEventListener('keydown', clipDock.onKey);
+  clipDock = null;
+}
 function openClipPlayer(vid, secs, title) {
-  const src = `https://www.youtube.com/embed/${vid}?start=${secs}&autoplay=1&rel=0&playsinline=1`;
-  const frame = el('iframe', { class: 'clip-player-frame', src, title: title || 'Game video',
-    allow: 'autoplay; encrypted-media; picture-in-picture; fullscreen', allowfullscreen: '' }, []);
-  const external = el('a', { class: 'clip-player-external yt-external', href: youtubeTimestampUrl(vid, secs), target: '_blank', rel: 'noopener noreferrer' },
-    [document.createTextNode('Open on YouTube ↗')]);
-  const d = openDialog(title || ('Clip at ' + formatTimestamp(secs)), [el('div', { class: 'clip-player-wrap' }, [frame]), external]);
-  d.dialog.classList.add('clip-player');
-  return d;
+  if (!clipDock) {
+    const titleEl = el('div', { class: 'clip-dock-title' }, []);
+    const closeBtn = el('button', { class: 'clip-dock-close', type: 'button', 'aria-label': 'Close the video' }, [document.createTextNode('✕')]);
+    closeBtn.addEventListener('click', closeClipPlayer);
+    const wrap = el('div', { class: 'clip-player-wrap' }, []);
+    const external = el('a', { class: 'clip-player-external yt-external', target: '_blank', rel: 'noopener noreferrer' }, [document.createTextNode('Open on YouTube ↗')]);
+    const root = el('aside', { class: 'clip-dock clip-player', role: 'complementary', 'aria-label': 'Clip player' }, [
+      el('div', { class: 'clip-dock-head' }, [titleEl, closeBtn]), wrap, external]);
+    const onKey = (e) => { if (e.key === 'Escape') closeClipPlayer(); };
+    document.addEventListener('keydown', onKey);
+    document.body.appendChild(root);
+    document.body.classList.add('clip-dock-open');
+    clipDock = { root, titleEl, wrap, external, onKey };
+  }
+  // A fresh iframe each time: changing src on a playing embed can keep the old clip.
+  clipDock.wrap.innerHTML = '';
+  clipDock.wrap.appendChild(el('iframe', { class: 'clip-player-frame', src: youtubeEmbedUrl(vid, secs), title: title || 'Game video',
+    referrerpolicy: 'strict-origin-when-cross-origin',
+    allow: 'autoplay; encrypted-media; picture-in-picture; fullscreen', allowfullscreen: '' }, []));
+  clipDock.titleEl.textContent = title || ('Clip at ' + formatTimestamp(secs));
+  clipDock.external.href = youtubeTimestampUrl(vid, secs);
+  return clipDock;
 }
 function initClipLinks() {
   document.addEventListener('click', (e) => {
@@ -5490,11 +5529,39 @@ function syncShowStatus() {
 
 // Publishing on a team site: the Team Report goes to the server, and the team
 // opens it at <team address>/view.
+// Publishing can take a while on a big season (rebuilding the stats when
+// events are ignored or corrected, then uploading a few MB), so it shows a
+// dialog saying what it's doing, and any error stays on screen in it.
+const PUBLISH_TIMEOUT_MS = 180000;
+let publishing = false;
 function sitePublishReport() {
-  teamReportHtml()
-    .then(html => fetch(SITE_BASE + '/api/report', { method: 'PUT', headers: { 'Content-Type': 'text/plain; charset=utf-8' }, body: html }))
-    .then(r => r.json().catch(() => ({})).then(j => { if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status)); return j; }))
+  if (publishing) return;
+  publishing = true;
+  const stepEl = el('p', { class: 'publish-step' }, [document.createTextNode('Getting everything together…')]);
+  const progress = openDialog('Publishing the Team Report', [
+    el('div', { class: 'publish-progress', role: 'status', 'aria-live': 'polite' }, [el('span', { class: 'publish-spinner', 'aria-hidden': 'true' }, []), stepEl]),
+    el('p', { class: 'app-dialog-note' }, [document.createTextNode('This can take up to a minute for a big season. Keep this page open.')]),
+  ], [{ label: 'Close', onClick: () => !publishing }]);
+  progress.dialog.classList.add('publish-dialog');
+  progress.dialog.querySelector('.cropper-actions button').disabled = true;
+  const step = t => { stepEl.textContent = t; };
+  const ann = loadAnnotations();
+  if (StattoStats.ignoredEventIds(ann).size || StattoStats.eventEdits(ann)) step('Recounting the stats without ignored events, with your corrections…');
+  const ctl = typeof AbortController === 'function' ? new AbortController() : null;
+  let timer = null;
+  Promise.resolve()
+    .then(() => Promise.all([appSaveNow(), SYNC ? syncPushNow() : null]))
+    .then(() => teamReportHtml())
+    .then(html => {
+      step(`Uploading the Team Report (${(html.length / 1048576).toFixed(1)} MB)…`);
+      if (ctl) timer = setTimeout(() => ctl.abort(), PUBLISH_TIMEOUT_MS);
+      return fetch(SITE_BASE + '/api/report', { method: 'PUT', headers: { 'Content-Type': 'text/plain; charset=utf-8' }, body: html, signal: ctl ? ctl.signal : undefined });
+    })
+    .then(r => r.json().catch(() => ({})).then(j => { if (!r.ok) throw new Error(j.error || ('the site answered ' + r.status)); return j; }))
     .then(() => {
+      clearTimeout(timer);
+      publishing = false;
+      progress.close();
       const link = location.origin + SITE_BASE + '/view';
       const box = el('input', { type: 'text', readonly: 'readonly', value: link, class: 'setup-video-input', 'aria-label': 'Team Report link' }, []);
       openDialog('Team Report published', [
@@ -5507,7 +5574,20 @@ function sitePublishReport() {
         { label: 'Done', primary: true },
       ]);
     })
-    .catch(err => alert('Couldn’t publish: ' + err.message));
+    .catch(err => {
+      clearTimeout(timer);
+      publishing = false;
+      const msg = err && err.name === 'AbortError'
+        ? 'The upload took too long and was stopped. Check your connection and try again.'
+        : (err && err.message) || String(err);
+      // A fresh dialog, so the error shows even if the progress one was dismissed.
+      progress.close();
+      const d = openDialog('Couldn’t publish the Team Report', [
+        el('p', { class: 'publish-step' }, [document.createTextNode(msg)]),
+        el('p', { class: 'app-dialog-note' }, [document.createTextNode('Nothing was changed: your team still sees the last Team Report you published. Your set-up and tags are saved.')]),
+      ]);
+      d.dialog.classList.add('publish-dialog', 'publish-failed');
+    });
 }
 
 // The stats engine (stats.js), loaded from the team site only when needed, so
