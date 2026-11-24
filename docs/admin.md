@@ -41,9 +41,7 @@ password for the whole site, and it opens every team.
 
 Where you author the season: the [Set up tab](report-guide.md#set-up----season-setup)
 (tournaments, video links, player photos, your team's defensive schemes, newer
-exports), the [Video annotation
-editor](report-guide.md#video-annotation-editor----season-setup) (tag film
-yourself, and watch helpers' tags arrive), [Line set
+exports), [Line set
 up](report-guide.md#line-set-up--line-analysis----season-setup--team-report) and
 [Handedness](report-guide.md#handedness----season-setup) (who throws left or
 right, with clips to check).
@@ -55,7 +53,8 @@ Everything saves to the site as you go; the pill at the bottom right says
   lines stay with the right games.
 - **Getting film tagged:** add each game's YouTube link on the Set up tab, then
   send helpers the team's address and tagger password. They pick games in the
-  [tagging hub](tagging.md). To put someone on a game, use **Share for
+  [tagging hub](tagging.md), where you tag film too (any game, from its
+  **Tag** button). To put someone on a game, use **Share for
   tagging** on its row (or they click **Claim** in the hub).
 - **Tags from before the site:** a helper sent you a tags file (from the old
   tagging pages' **Export annotations JSON**)? In the **Tagging hub**, click

@@ -20,7 +20,7 @@ const VIEWER_MODE = !!(typeof window !== 'undefined' && window.__STATTO_VIEWER__
 // locked to this one game.
 const TAGONLY_GAME = (typeof window !== 'undefined' && typeof window.__STATTO_TAGONLY_GAME__ === 'number') ? window.__STATTO_TAGONLY_GAME__ : null;
 // No flags: Season setup (web/editor.html), the admin's authoring console with
-// only Set up, the Video annotation editor and Line set up. All the analysis
+// only Set up, Line set up and Handedness (film is tagged in the Tagging hub). All the analysis
 // tabs live in the published Team Report (VIEWER_MODE).
 const SETUP_MODE = !VIEWER_MODE && TAGONLY_GAME == null;
 // Stamped into a published Team Report so viewers can see when it was made.
@@ -313,7 +313,6 @@ function buildNav() {
     if (APP) buildAppStatus();
     // The Set up editor: a desktop authoring console, nothing else.
     nav.appendChild(el('button', { class: 'tab active', 'data-target': 'setup' }, [document.createTextNode('Set up')]));
-    nav.appendChild(el('button', { class: 'tab', 'data-target': 'data-editor' }, [document.createTextNode('Video annotation editor')]));
     nav.appendChild(el('button', { class: 'tab', 'data-target': 'line-setup' }, [document.createTextNode('Line set up')]));
     nav.appendChild(el('button', { class: 'tab', 'data-target': 'handedness' }, [document.createTextNode('Handedness')]));
   } else {
@@ -4809,8 +4808,8 @@ function pointKey(gameIndex, pointNumber) { return gameIndex + '|' + pointNumber
 function linesStorageKey() { return 'statto-report-lines::' + REPORT.teamName + appKeySuffix(); }
 
 // ---------- Data Editor: per-pass / per-block film annotations ----------
-// The Data Editor (the "Video annotation editor" tab in the Set up editor,
-// "Video Tagging" on a tagging page, "Film Clips" in the Team Report) lets you step through every
+// The Data Editor ("Video Tagging" on a tagging page, opened from the Tagging
+// hub; "Film Clips" in the Team Report) lets you step through every
 // pass on a game's field diagram and tag it with descriptive attributes plus
 // a video timestamp, for querying later ("all inside-flick turnovers", "% of
 // turnovers that were around backhands", each deep-linking to the game video).
@@ -4948,18 +4947,6 @@ function saveAnnotations(data) {
     }));
     if (SYNC) syncNoteChange(); else appNoteChange();
   } catch (e) {}
-}
-
-// Merge an incoming {uuid: {field: value}} store into a target one, per-field
-// (not per-record), so two taggers who annotated the same pass with different
-// fields both survive; on a same-field conflict the incoming value wins.
-function mergeAnnotationStore(target, incoming) {
-  if (!incoming || typeof incoming !== 'object') return;
-  Object.keys(incoming).forEach(uuid => {
-    const rec = incoming[uuid];
-    if (!rec || typeof rec !== 'object') return;
-    target[uuid] = Object.assign({}, target[uuid], rec);
-  });
 }
 
 // Pull the video id out of the game's Set up link -- handles youtu.be/ID,
@@ -8668,9 +8655,10 @@ function renderEditorItem(routeLayer, point, focus) {
   });
 }
 
+// Two forms: the read-only Film Clips browser (viewer) in the Team Report, and
+// a game's tagging page (tagOnlyGame), opened from the Tagging hub.
 function buildDataEditorSection(viewer, tagOnlyGame) {
-  const tagOnly = (tagOnlyGame != null);
-  const section = el('section', { class: 'view' + (tagOnly ? ' active' : ''), id: 'data-editor' }, []);
+  const section = el('section', { class: 'view' + (viewer ? '' : ' active'), id: 'data-editor' }, []);
 
   // In a published team report the whole tagging editor is stripped out --
   // just the read-only clip browser remains, so the team can explore the film
@@ -8682,36 +8670,14 @@ function buildDataEditorSection(viewer, tagOnlyGame) {
     return section;
   }
 
-  section.appendChild(el('p', { class: 'eyebrow' }, [document.createTextNode(tagOnly ? 'Video Tagging' : 'Data Editor')]));
-  section.appendChild(el('p', { class: 'hero-sub' }, [document.createTextNode(tagOnly
-    ? 'Tag this game’s events — passes, blocks, pulls, defensive possessions and opponent turnovers — with throw type, release, outcome detail, and a video timestamp. Every tag saves to the team site as you go, and anyone can carry on where you stop. When the game’s finished, mark it done in the Tagging hub.'
-    : 'Step through a game’s events — passes, blocks, pulls, defensive possessions and opponent turnovers — and tag each one, to build a richer, queryable film dataset.')]));
+  section.appendChild(el('p', { class: 'eyebrow' }, [document.createTextNode('Video Tagging')]));
+  section.appendChild(el('p', { class: 'hero-sub' }, [document.createTextNode(
+    'Tag this game’s events — passes, blocks, pulls, defensive possessions and opponent turnovers — with throw type, release, outcome detail, and a video timestamp. Every tag saves to the team site as you go, and anyone can carry on where you stop. When the game’s finished, mark it done in the Tagging hub.')]));
 
   const tagPane = el('div', {}, []);
-  if (!tagOnly) {
-    // Tag mode = the stepping editor; Query mode = filter the tagged data back
-    // out into a clip list. Both live in this one tab so the whole rich-dataset
-    // workflow stays together. (A single-game tagging page shows the tag editor
-    // only -- no query view.)
-    const queryPaneObj = buildAnnotationQueryPane();
-    const queryPane = queryPaneObj.pane;
-    queryPane.style.display = 'none';
-    section.appendChild(el('div', { class: 'controls-row de-mode-row' }, [buildSegToggle(
-      [{ key: 'tag', label: 'Tag' }, { key: 'query', label: 'Query' }],
-      (k) => {
-        const q = k === 'query';
-        tagPane.style.display = q ? 'none' : '';
-        queryPane.style.display = q ? '' : 'none';
-        if (q) queryPaneObj.refresh();
-      }
-    )]));
-    section.appendChild(tagPane);
-    section.appendChild(queryPane);
-  } else {
-    section.appendChild(tagPane);
-  }
+  section.appendChild(tagPane);
 
-  let gameIndex = tagOnly ? tagOnlyGame : 0;
+  const gameIndex = tagOnlyGame;
   let allSteps = [];   // every event in the game
   let steps = [];      // allSteps narrowed by the events filter -- what's stepped through
   let eventFilter = 'all';
@@ -8728,18 +8694,13 @@ function buildDataEditorSection(viewer, tagOnlyGame) {
     el('span', { class: 'de-events-note' }, [document.createTextNode('“Except throws” skips completed passes that didn’t score — much faster to get through. Pulls, opponent turnovers, blocks, defensive possessions, turnovers and assists all stay, and your tags are kept either way.')]),
   ]));
 
-  // ---- game picker (fixed to one game on a tagging page) ----
-  if (tagOnly) {
+  // ---- the game (a tagging page is for one game) ----
+  {
     const g = REPORT.games[tagOnlyGame];
     tagPane.appendChild(el('div', { class: 'controls-row de-game-row' }, [
       el('span', { class: 'de-inline-label' }, [document.createTextNode('Game')]),
       el('span', { class: 'de-game-fixed' }, [document.createTextNode(`vs ${g.opponent} — ${g.dateDisplay}`)]),
     ]));
-  } else {
-    const gameSelect = el('select', { class: 'setup-select de-game-select' }, []);
-    REPORT.games.forEach((g, i) => gameSelect.appendChild(el('option', { value: String(i) }, [document.createTextNode(`vs ${g.opponent} — ${g.dateDisplay}`)])));
-    gameSelect.addEventListener('change', () => { gameIndex = parseInt(gameSelect.value, 10); loadGame(); });
-    tagPane.appendChild(el('div', { class: 'controls-row de-game-row' }, [el('span', { class: 'de-inline-label' }, [document.createTextNode('Game')]), gameSelect]));
   }
 
   // ---- layout: video | field | tag panel ----
@@ -9518,41 +9479,8 @@ function buildDataEditorSection(viewer, tagOnlyGame) {
     else if (e.key === '.') { e.preventDefault(); nudgeTimestamp(1); }
   });
 
-  // ---- export / import (Season setup) + tagged count ----
-  function annotationsFilename() { return slug(REPORT.teamName) + '_annotations.json'; }
-  const exportBtn = el('button', { class: 'csv-download', type: 'button' }, [document.createTextNode('Export annotations JSON')]);
-  exportBtn.addEventListener('click', () => {
-    downloadFile(JSON.stringify({ version: ANNOTATIONS_SCHEMA_VERSION, teamName: REPORT.teamName, passes: annotations.passes, blocks: annotations.blocks, points: annotations.points }, null, 2),
-      annotationsFilename(), 'application/json');
-  });
-  const importBtn = el('button', { class: 'csv-download', type: 'button' }, [document.createTextNode('Import annotations JSON')]);
-  const importInput = el('input', { type: 'file', accept: 'application/json,.json' }, []);
-  importInput.style.display = 'none';
-  importBtn.addEventListener('click', () => importInput.click());
-  importInput.addEventListener('change', () => {
-    const file = importInput.files && importInput.files[0];
-    importInput.value = '';
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      try {
-        const parsed = JSON.parse(reader.result);
-        // Field-level merge (not whole-record replace) so combining several
-        // taggers who touched the same pass keeps everyone's fields -- e.g. one
-        // added Hand, another added Release. On a genuine conflict of the same
-        // field, the imported file wins.
-        mergeAnnotationStore(annotations.passes, parsed.passes);
-        mergeAnnotationStore(annotations.blocks, parsed.blocks);
-        mergeAnnotationStore(annotations.points || (annotations.points = {}), parsed.points);
-        saveAnnotations(annotations);
-        updateTaggedCount();
-        render();
-      } catch (e) { alert('Could not read that annotations file.'); }
-    };
-    reader.readAsText(file);
-  });
-  // On a tagging page, tags save to the site: no files to swap.
-  tagPane.appendChild(el('div', { class: 'controls-row de-io-row' }, tagOnly ? [taggedCount] : [exportBtn, importBtn, taggedCount, importInput]));
+  // ---- tagged count (tags save to the site: no files to swap) ----
+  tagPane.appendChild(el('div', { class: 'controls-row de-io-row' }, [taggedCount]));
 
   // Refresh on every visit: pick up a video link added on Set up, or
   // annotations changed by an import elsewhere, without a reload.
@@ -11131,7 +11059,6 @@ function init() {
   if (SETUP_MODE) {
     main.appendChild(el('div', { class: 'setup-desktop-note' }, [document.createTextNode('The Set up editor is built for desktop — on a small screen some controls will be cramped. The published Team Report is the mobile-friendly one.')]));
     main.appendChild(buildSetupSection());
-    main.appendChild(buildDataEditorSection(false));
     mountRebuildableView(() => buildLineAnalysisSection('setup'));
     main.appendChild(buildHandednessSection());
     initTableScrollAffordance(main);

@@ -7,7 +7,7 @@ together, and a mobile **Team Report** your players open: team performance,
 every game, players, lines, field position, gender equity, time series,
 advanced stats and film clips.
 
-![How it works: take stats in Statto and export the .statto file; upload it to your site as a team, adding newer exports as you go; set up the season and tag film in Season setup; helpers tag games live in the tagging hub; then publish the Team Report your team opens.](docs/how-it-works.svg)
+![How it works: take stats in Statto and export the .statto file; upload it to your site as a team, adding newer exports as you go; set up the season in Season setup; you and your helpers tag games live in the tagging hub; then publish the Team Report your team opens.](docs/how-it-works.svg)
 
 It runs on Cloudflare's free plan, as your own site: your data never leaves it.
 One site holds as many teams or seasons as you like, each completely separate.

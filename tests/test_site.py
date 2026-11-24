@@ -621,9 +621,13 @@ class BrowserTests(unittest.TestCase):
         self.assertEqual(tags[p0]["by"], "Alex")
         self.assertEqual(tags[p1]["by"], "Blake")
 
-        # The editor's own annotation editor gets them live too.
+        # Season setup gets them live too (for publishing); it has no tagging
+        # tab of its own -- the admin tags in the hub like everyone else.
         ed = self.sign_in(editor_ctx, "editor", EDITOR_PW, go="/editor")
         self.setup_rows(ed)
+        self.assertEqual(ed.eval_on_selector_all("#topnav button.tab", "b => b.map(x => x.textContent)"),
+                         ["Set up", "Line set up", "Handedness"])
+        self.assertIsNone(ed.query_selector("#data-editor"))
         blake.evaluate(tag, [2, "Hammer"])
         wait_until(lambda: len(ed.evaluate("() => Object.keys(loadAnnotations().passes)")) >= 3, message="editor sees new tags")
 

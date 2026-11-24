@@ -1481,7 +1481,6 @@
   /* ---------- Data Editor ---------- */
   .de-game-row { align-items: center; gap: 10px; }
   .de-inline-label { font-size: 12px; font-weight: 700; color: var(--chalk-dim); text-transform: uppercase; letter-spacing: 0.06em; }
-  .de-game-select { min-width: 240px; }
   .de-game-fixed { font-weight: 700; color: var(--chalk); }
   .setup-tag-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .setup-tag-actions .pill-btn { margin-top: 0; padding: 5px 10px; }
@@ -1666,7 +1665,6 @@
   .de-ts-row .pill-btn:disabled { opacity: 0.4; cursor: not-allowed; }
   .de-io-row { align-items: center; gap: 10px; margin-top: 20px; }
   .de-tagged-count { font-size: 12px; color: var(--chalk-dim); }
-  .de-mode-row { margin: 4px 0 14px; }
 
   /* Data Editor -- Query pane */
   .de-query-top { display: flex; flex-wrap: wrap; gap: 18px; align-items: flex-end; margin-bottom: 14px; }
