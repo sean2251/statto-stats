@@ -979,6 +979,287 @@ class BrowserTests(unittest.TestCase):
         ctx.close()
         self.assertEqual(self.errors, [])
 
+    def test_9c_pull_out_of_bounds_tap_in(self):
+        """An out-of-bounds pull stays tagged out of bounds, and a click on the
+        field marks where it was tapped in, snapped to the middle of the field."""
+        api = Api(self.base, "other-club").login("editor", EDITOR_PW)
+        ctx = self.context()
+        page = self.sign_in(ctx, "tagger", "other-club-tagger", "Gale", team="other-club")
+        page.wait_for_selector(".game")
+        page.click(".game >> nth=0 >> .actions a.btn")
+        page.wait_for_selector(".de-tagged-count")
+        for _ in range(60):  # step to the first pull
+            if page.text_content(".de-panel-title") == "Pull":
+                break
+            page.keyboard.press("ArrowRight")
+        self.assertEqual(page.text_content(".de-panel-title"), "Pull")
+        landing = "label.de-field:has-text('Landing') select"
+        self.assertEqual(page.eval_on_selector_all(landing + " option", "e => e.map(o => o.textContent)"),
+                         ["In-bounds (click the field)", "Out-of-bounds (click the field where disc tapped in)"])
+        key = page.evaluate("() => StattoStats.gameEvents(REPORT.games[TAGONLY_GAME]).find(e => e.kind === 'pull').uuid")
+
+        def saved():
+            tags = {c["key"]: c["data"] for c in api.call("GET", "/api/tags?since=0")[1]["changes"] if c["kind"] == "points"}
+            return tags.get(key) or {}
+
+        def click_field(fx, fy):
+            box = page.locator(".de-pitch svg").bounding_box()
+            page.click(".de-pitch svg", position={"x": box["width"] * fx, "y": box["height"] * fy})
+
+        # In bounds: the click is where it landed.
+        click_field(0.2, 0.3)
+        wait_until(lambda: saved().get("landX") is not None, message="landing saved")
+        self.assertAlmostEqual(saved()["landX"], 0.2, delta=0.03)
+        self.assertNotIn("outOfBounds", saved())
+
+        # Out of bounds: the click is the tap-in spot, snapped to the middle.
+        page.select_option(landing, "oob")
+        page.wait_for_selector(".de-pull-status:has-text('click the field where the disc was tapped in')")
+        click_field(0.1, 0.4)
+        wait_until(lambda: saved().get("tapInY") is not None, message="tap-in saved")
+        rec = saved()
+        self.assertTrue(rec["outOfBounds"])
+        self.assertEqual(rec["tapInX"], 0.5)
+        self.assertAlmostEqual(rec["tapInY"], 0.4, delta=0.03)
+        self.assertNotIn("landX", rec, "an out-of-bounds pull has no landing spot")
+        page.wait_for_selector(".de-pull-status:has-text('tapped in at y')")
+        self.assertEqual(page.locator(".de-pitch svg circle[stroke-dasharray]").count(), 1, "the tap-in marker")
+
+        # The export marks it out of bounds with its tap-in spot.
+        ectx = self.context()
+        ed = self.sign_in(ectx, "editor", EDITOR_PW, go="/editor", team="other-club")
+        self.setup_rows(ed)
+        pulls = [p for p in ed.evaluate("() => buildRawDataExportJSON(REPORT.games.map((g, i) => i)).pullEvents") if p["outOfBounds"]]
+        self.assertEqual(len(pulls), 1)
+        self.assertEqual((pulls[0]["tapInX"], pulls[0]["landX"]), (0.5, None))
+        self.assertAlmostEqual(pulls[0]["tapInY"], rec["tapInY"])
+        ectx.close()
+
+        # Back to in bounds: the tap-in spot goes.
+        page.select_option(landing, "")
+        wait_until(lambda: "tapInY" not in saved() and not saved().get("outOfBounds"), message="back to in bounds")
+        ctx.close()
+        self.assertEqual(self.errors, [])
+    def test_9d_ignore_an_event(self):
+        """"Ignore this event" leaves a pass out of every count and of the
+        published Team Report's stats; "Stop ignoring" brings it back."""
+        api = Api(self.base, "other-club").login("editor", EDITOR_PW)
+        ctx = self.context()
+        page = self.sign_in(ctx, "tagger", "other-club-tagger", "Hal", team="other-club")
+        page.wait_for_selector(".game")
+        page.click(".game >> nth=0 >> .actions a.btn")
+        page.wait_for_selector(".de-tagged-count")
+        # Step to the game's first plain completed pass.
+        target = page.evaluate("""() => {
+            const evs = StattoStats.gameEvents(REPORT.games[TAGONLY_GAME]);
+            const i = evs.findIndex(e => e.kind === 'pass' && !e.item.turnover && !e.item.assist && e.item.thrower);
+            return { i, uuid: evs[i].uuid, thrower: evs[i].item.thrower, game: REPORT.games[TAGONLY_GAME].uuid }; }""")
+        for _ in range(target["i"]):
+            page.keyboard.press("ArrowRight")
+        self.assertIn(target["thrower"], page.text_content(".de-panel-title"))
+        before = page.text_content(".de-tagged-count")
+        tagged, total = [int(x) for x in before.split(" events")[0].split(" of ")]
+
+        page.click("button:has-text('Ignore this event')")
+        page.wait_for_selector(".de-ignored-note")
+        self.assertEqual(page.text_content(".de-tagged-count"),
+                         "%d of %d events tagged in this view (1 ignored)" % (tagged, total - 1))
+
+        def server_rec():
+            tags = {c["key"]: c["data"] for c in api.call("GET", "/api/tags?since=0")[1]["changes"] if c["kind"] == "passes"}
+            return tags.get(target["uuid"])
+        wait_until(lambda: (server_rec() or {}).get("ignored") is True, message="ignore saved")
+
+        # The hub leaves it out of the game's total.
+        hub = ctx.new_page()
+        hub.goto(self.base + "/t/other-club/tag")
+        hub.wait_for_selector(".game")
+        rows = hub.eval_on_selector_all(".game .meta", "e => e.map(x => x.textContent)")
+        self.assertTrue(any("/%d tagged" % (total - 1) in r for r in rows), rows)
+
+        # Published, the Team Report has no trace of it, and the thrower's throws drop by one.
+        ectx = self.context()
+        ed = self.sign_in(ectx, "editor", EDITOR_PW, go="/editor", team="other-club")
+        self.setup_rows(ed)
+        full_throws = ed.evaluate("t => REPORT.seasonLeaderboard.find(r => r.player === t).throws", target["thrower"])
+
+        def publish_and_read():
+            ed.click("text=Publish Team Report")
+            ed.wait_for_selector(".app-dialog >> text=Team Report published")
+            ed.click(".app-dialog button:has-text('Done')")
+            html = api.call("GET", "/api/report", raw=True)[1].decode("utf-8")
+            data = html.split('<script id="report-data" type="application/json">', 1)[1].split("</script>", 1)[0]
+            return html, json.loads(data)
+        html, report = publish_and_read()
+        self.assertNotIn(target["uuid"], html)
+        self.assertEqual(next(r for r in report["seasonLeaderboard"] if r["player"] == target["thrower"])["throws"], full_throws - 1)
+
+        # Stop ignoring: it's back everywhere.
+        page.click("button:has-text('Stop ignoring this event')")
+        page.wait_for_selector("button:has-text('Ignore this event')")
+        self.assertEqual(page.text_content(".de-tagged-count"), before)
+        wait_until(lambda: not (server_rec() or {}).get("ignored"), message="un-ignore saved")
+
+        # "Out of timeout" (above the ignore button) tags the throw, and clears.
+        self.assertEqual(page.eval_on_selector_all(".de-flag-row ~ .de-ignore-row, .de-flag-row", "e => e.map(x => x.className)"),
+                         ["controls-row de-flag-row", "controls-row de-ignore-row"])
+        page.click("button:has-text('Out of timeout')")
+        page.wait_for_selector("button.de-flag-btn[aria-pressed=true]")
+        wait_until(lambda: (server_rec() or {}).get("outOfTimeout") is True, message="out of timeout saved")
+        self.assertIn("Out of timeout", page.evaluate("k => filmTagValues(loadAnnotations().passes[k], FILM_PASS_TAG_KEYS)", target["uuid"]))
+        page.click("button.de-flag-btn")
+        page.wait_for_selector("button.de-flag-btn[aria-pressed=false]")
+        wait_until(lambda: not (server_rec() or {}).get("outOfTimeout"), message="out of timeout cleared")
+
+        # "Edit" (below the ignore button) corrects the thrower; the published
+        # report credits the new one.
+        page.click("button.de-edit-btn")
+        thrower_sel = ".de-edit select[aria-label=Thrower]"
+        page.wait_for_selector(thrower_sel)
+        options = page.eval_on_selector_all(thrower_sel + " option", "e => e.map(o => o.value)")
+        new_thrower = next(n for n in options if n != target["thrower"])
+        page.select_option(thrower_sel, new_thrower)
+        wait_until(lambda: ((server_rec() or {}).get("edit") or {}).get("thrower") == new_thrower, message="edit saved")
+        self.assertIn(new_thrower + " →", page.text_content(".de-panel-title"))
+        self.assertIn("Thrower was " + target["thrower"], page.text_content(".de-edit"))
+        ed.reload()
+        self.setup_rows(ed)
+        new_full = ed.evaluate("t => (REPORT.seasonLeaderboard.find(r => r.player === t) || {}).throws || 0", new_thrower)
+        html, report = publish_and_read()
+        passes = [p for g in report["games"] for pt in g["points"] for p in pt["passes"] if p["uuid"] == target["uuid"]]
+        self.assertEqual(passes[0]["thrower"], new_thrower)
+        self.assertEqual(next(r for r in report["seasonLeaderboard"] if r["player"] == new_thrower)["throws"], new_full + 1)
+        page.click("button:has-text('Back to what Statto has')")
+        wait_until(lambda: not (server_rec() or {}).get("edit"), message="edit cleared")
+        self.assertIn(target["thrower"] + " →", page.text_content(".de-panel-title"))
+        ed.reload()
+        self.setup_rows(ed)
+        html, report = publish_and_read()
+        self.assertIn(target["uuid"], html)
+        self.assertEqual(next(r for r in report["seasonLeaderboard"] if r["player"] == target["thrower"])["throws"], full_throws)
+        ectx.close()
+        ctx.close()
+        self.assertEqual(self.errors, [])
+
+    def test_9e_opponent_called_timeout(self):
+        """A defensive possession can be tagged "Opponent called timeout"."""
+        api = Api(self.base, "other-club").login("editor", EDITOR_PW)
+        ctx = self.context()
+        page = self.sign_in(ctx, "tagger", "other-club-tagger", "Ivy", team="other-club")
+        page.wait_for_selector(".game")
+        page.click(".game >> nth=0 >> .actions a.btn")
+        page.wait_for_selector(".de-tagged-count")
+        target = page.evaluate("""() => {
+            const evs = StattoStats.gameEvents(REPORT.games[TAGONLY_GAME]);
+            const i = evs.findIndex(e => e.kind === 'def');
+            return { i, uuid: evs[i].uuid }; }""")
+        for _ in range(target["i"]):
+            page.keyboard.press("ArrowRight")
+        self.assertTrue(page.text_content(".de-panel-title").startswith("Defensive possession"))
+        # Above the ignore button.
+        self.assertEqual(page.eval_on_selector_all(".de-flag-row, .de-ignore-row", "e => e.map(x => x.className)"),
+                         ["controls-row de-flag-row", "controls-row de-ignore-row"])
+
+        def server_rec():
+            tags = {c["key"]: c["data"] for c in api.call("GET", "/api/tags?since=0")[1]["changes"] if c["kind"] == "points"}
+            return tags.get(target["uuid"]) or {}
+        page.click("button:has-text('Opponent called timeout')")
+        page.wait_for_selector("button.de-flag-btn[aria-pressed=true]")
+        wait_until(lambda: server_rec().get("oppTimeout") is True, message="opponent timeout saved")
+        self.assertIn("Opponent called timeout", page.evaluate("k => filmTagValues(loadAnnotations().points[k], ['defScheme', 'oppTimeout'])", target["uuid"]))
+        page.click("button.de-flag-btn")
+        wait_until(lambda: not server_rec().get("oppTimeout"), message="cleared")
+        ctx.close()
+        self.assertEqual(self.errors, [])
+
+    def test_9f_turnover_pies_on_game_pages(self):
+        """A game page in the Team Report shows our and the opponent's
+        turnovers by tagged type, once any of them is tagged."""
+        api = Api(self.base, "other-club").login("editor", EDITOR_PW)
+        ctx = self.context()
+        ed = self.sign_in(ctx, "editor", EDITOR_PW, go="/editor", team="other-club")
+        self.setup_rows(ed)
+        pick = ed.evaluate("""() => {
+            for (let gi = 0; gi < REPORT.games.length; gi++) {
+                const evs = StattoStats.gameEvents(REPORT.games[gi]);
+                const to = evs.find(e => e.kind === 'pass' && e.item.turnover);
+                const bl = evs.find(e => e.kind === 'block');
+                if (to && bl) return { gi, game: REPORT.games[gi].uuid, to: to.uuid, bl: bl.uuid,
+                    turnovers: evs.filter(e => e.kind === 'pass' && e.item.turnover).length };
+            }
+            return null; }""")
+        self.assertIsNotNone(pick)
+        api.call("POST", "/api/tags", {"changes": [
+            {"kind": "passes", "key": pick["to"], "game": pick["game"], "data": {"turnoverReason": ["Drop", "Miscommunication"]}},
+            {"kind": "blocks", "key": pick["bl"], "game": pick["game"], "data": {"type": "Sky/boxout"}}]})
+        ed.reload()
+        self.setup_rows(ed)
+        ed.click("text=Publish Team Report")
+        ed.wait_for_selector(".app-dialog >> text=Team Report published")
+        view = ctx.new_page()
+        view.goto(self.base + "/t/other-club/view")
+        view.wait_for_selector("#topnav button.tab")
+        gid = "game-%d" % pick["gi"]
+        view.evaluate("id => showView(id)", gid)
+        cards = "#%s .pie-card" % gid
+        view.wait_for_selector(cards)
+        ours = view.eval_on_selector_all(cards + " >> nth=0 >> .pie-legend .pie-label", "e => e.map(x => x.textContent)")
+        self.assertIn("Drop", ours)
+        self.assertIn("Miscommunication", ours)
+        if pick["turnovers"] > 1:
+            self.assertIn("Not tagged", ours)
+        self.assertEqual(view.text_content(cards + " >> nth=0 >> .pie-center-big"), str(pick["turnovers"]))
+        self.assertIn("Sky/boxout", view.eval_on_selector_all(cards + " >> nth=1 >> .pie-legend .pie-label", "e => e.map(x => x.textContent)"))
+        ctx.close()
+        self.assertEqual(self.errors, [])
+
+
+    def test_9g_film_analysis_tabs(self):
+        """Tags feed the film sections: a player's throwing profile, the
+        Season's turnover trend, the Defense tab and My clips."""
+        api = Api(self.base, "other-club").login("editor", EDITOR_PW)
+        ctx = self.context()
+        ed = self.sign_in(ctx, "editor", EDITOR_PW, go="/editor", team="other-club")
+        self.setup_rows(ed)
+        pick = ed.evaluate("""() => {
+            for (let gi = 0; gi < REPORT.games.length; gi++) {
+                const evs = StattoStats.gameEvents(REPORT.games[gi]);
+                const pa = evs.find(e => e.kind === 'pass' && !e.item.turnover && e.item.thrower);
+                const pull = evs.find(e => e.kind === 'pull');
+                const def = evs.find(e => e.kind === 'def');
+                if (pa && pull && def) return { game: REPORT.games[gi].uuid, pass: pa.uuid, thrower: pa.item.thrower,
+                    pull: pull.uuid, def: def.uuid };
+            }
+            return null; }""")
+        self.assertIsNotNone(pick)
+        api.call("POST", "/api/tags", {"changes": [
+            {"kind": "passes", "key": pick["pass"], "game": pick["game"], "data": {"hand": "Backhand", "timestamp": 75}},
+            {"kind": "points", "key": pick["pull"], "game": pick["game"], "data": {"puller": pick["thrower"], "outOfBounds": True, "timestamp": 30}},
+            {"kind": "points", "key": pick["def"], "game": pick["game"], "data": {"defScheme": "Person"}}]})
+        ed.reload()
+        self.setup_rows(ed)
+        ed.click("text=Publish Team Report")
+        ed.wait_for_selector(".app-dialog >> text=Team Report published")
+        view = ctx.new_page()
+        view.goto(self.base + "/t/other-club/view")
+        view.wait_for_selector("#topnav button.tab")
+        view.evaluate("() => showView('defense')")
+        view.wait_for_selector("#defense .film-table")
+        text = view.text_content("#defense")
+        self.assertIn("Schemes", text)
+        self.assertIn("Person", text)
+        self.assertIn("Pullers", text)
+        self.assertIn(pick["thrower"], text)
+        view.evaluate("() => showView('my-clips')")
+        view.wait_for_selector("#my-clips select")
+        view.select_option("#my-clips select", pick["thrower"])
+        view.wait_for_selector("#my-clips .my-clips li")
+        clips = view.text_content("#my-clips")
+        self.assertIn("Throw to", clips)
+        self.assertIn("Pull", clips)
+        self.assertIn("Backhand", clips)
+        ctx.close()
+        self.assertEqual(self.errors, [])
 
 def passes_by_game(statto):
     """{opponent: [{uuid, game}]} for every pass in a .statto export."""

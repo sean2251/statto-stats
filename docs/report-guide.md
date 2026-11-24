@@ -6,8 +6,8 @@ Each team's pages split into two:
   **Line set up** and **Handedness**. This is where you author; none of the analysis lives
   here. Everything saves to the site as you go.
 - **Team Report** (what you publish from Season setup, at `<team address>/view`)
-  — **Season**, a **Games** dropdown, **Film Clips**, **Player Analysis**,
-  **Line Analysis**, **Thrower-Receiver Analysis**, **Field Analysis**,
+  — **Season**, a **Games** dropdown, **Film Clips**, **My clips**, **Player Analysis**,
+  **Line Analysis**, **Thrower-Receiver Analysis**, **Field Analysis**, **Defense**,
   **Gender Analysis**, **Time Series**, **Advanced Stats**, and **Raw Data**.
   Read-only and mobile-friendly.
 
@@ -94,7 +94,12 @@ richer, queryable film dataset on top of the raw Statto data.
   everything else, which is far quicker to work through. It's purely a view
   filter — flip between the two freely without losing tags.
 - **Pulls** open every defensive point: record **who pulled**, and click the
-  field to mark **where the pull landed** (or pick Out-of-bounds).
+  field to mark **where the pull landed**. For a pull that went out, pick
+  **Out-of-bounds (click the field where disc tapped in)** and click where it was
+  brought into play: the spot snaps to the middle of the field, at the height
+  you clicked (an out-of-bounds pull always comes to the middle). The pull
+  stays tagged out-of-bounds, and its tap-in spot shows as a dashed amber ring
+  rather than the teal landing marker.
 - **Opponent turnovers** that weren't your blocks get their own step (Huck
   turnover / Throwing error / Receiver error). Statto records nothing for
   these, so they're inferred as opponent possessions you won the disc back
@@ -118,6 +123,24 @@ richer, queryable film dataset on top of the raw Statto data.
   embeds the YouTube player — scrub to the moment and click **Grab current
   time**, or **Jump** back to a saved time. No link, or prefer to type it?
   Enter a timestamp as `mm:ss` manually.
+- **Out of timeout**, on a pass, marks it as the first throw after a timeout
+  we called (click again to clear). It shows with the pass's tags, can be
+  filtered on in Query (Out of timeout: Yes / No), and is in the export as
+  `filmTags.outOfTimeout`. On a defensive possession, **Opponent called timeout**
+  marks that they called a timeout during it (filterable too; in the export
+  as `oppTimeout` on that possession).
+- **Edit**, on a pass or block, corrects the thrower and/or receiver, or who
+  got the D, when Statto has it wrong. The panel shows the corrected names
+  (and what Statto had); the published Team Report is rebuilt with the
+  correction, so every stat credits the right player. Who pulled is the
+  pull's own Puller field.
+- **Ignore this event**, at the bottom of every event's tag panel, leaves an
+  event out of everything: every stat (completion rates, the leaderboard,
+  lines, …), tag counts, exports and the published Team Report. Use it for
+  passes that are wrong or only there to make a Statto point add up. Ignoring
+  an assist also drops the assist and goal; ignoring a turnover drops that
+  turnover. **Stop ignoring this event** brings it back. Publish again for the
+  Team Report to catch up.
 - Tags save to the site event by event, so you see helpers' tags arrive as
   they work (and they see yours). They ride along when you **Publish the Team Report**, and have their own **Export / Import annotations JSON** (e.g. to bring
   in tags from an old helper's file). They key to Statto's stable pass IDs, so
@@ -166,15 +189,27 @@ published Team Report, and is in the Raw Data JSON export (`roster[].handedness`
     games — or whole tournaments at once (see [Set up](#set-up----season-setup)) — instead
     of the whole season
   - **Download CSV** on every table
+- **Turnovers by type** (once film is tagged) — our turnovers and the
+  opponents' as pies by tagged reason, with their own games filter, and a
+  **Turnover reasons by game** table showing whether each reason is going up
+  or down from game to game
 
 ## Games (one page per game, reached via the Games dropdown)  ·  *Team Report*
 
 - Score, opponent, and result
 - A **▶ Watch game** button, if you've added a video link for this game on
   the [Set up](#set-up----season-setup) tab
-Top to bottom: **Summary Statistics → Scoring Efficiency → Point
-differential → the point log / field diagram / tagged events columns →
-Clutch Efficiency → Box score.**
+Top to bottom: **Summary Statistics → Scoring Efficiency → Turnovers by
+type → Point differential → the point log / field diagram / tagged events
+columns → Clutch Efficiency → Box score.**
+
+- **Turnovers by type** (once any of the game's turnovers is tagged): two
+  donut charts. *Our turnovers* splits them by tagged turnover reason; a
+  turnover can have more than one reason, so its slices count reasons. *Their
+  turnovers* counts each of the opponent's turnovers once: our blocks by block
+  type and their unforced errors by type. The five most common types each get
+  a slice, the rest fold into Other, and untagged ones are a hatched **Not
+  tagged** slice. Hover a slice for its count.
 
 - A **Combined / Offensive points / Defensive points** toggle over the core
   box stats (completions, hucks, blocks, opponent turnovers, red-zone
@@ -274,6 +309,10 @@ side by side:
   shared filter for which category of throw to show (All throws, Assist
   attempts, Huck attempts, Throwing errors, Receiving errors, Blocks — "All
   throws" is exclusive with the rest, the others can be combined)
+- **From the film** (once passes are tagged) — each player's completion rate
+  by hand, release, distance and throw group (backhands, flicks, hammers &
+  scoobers, break throws, hucks, resets), their tagged turnover reasons and
+  drops, with ▶ links to those turnovers in the video
 
 ## Line set up / Line Analysis  ·  *Season setup + Team Report*
 
@@ -336,7 +375,8 @@ short:
    mostly decided games — hold/break rate, throw/huck/assist completion,
    blocks, opponent turnovers, red-zone conversion), per-line
    **Scoring Efficiency** gauges, and per-line **field diagrams** with the
-   same category filter used elsewhere.
+   same category filter used elsewhere. Once defensive possessions are
+   tagged, **Defence by scheme** shows each line's stop rate in each scheme.
 
    The last two rows are small **histograms of possession length** — how many
    throws a possession took, split by how it ended: one for possessions that
@@ -404,7 +444,9 @@ players or lines:
   currently filtered
 
 A shared **Games filter** scopes the heatmap, Compare Pairs, and the All
-pairs data table together.
+pairs data table together. Once passes are tagged, Compare Pairs adds a
+**From the film** table: each pair's completion by hand, release, distance
+and throw group.
 
 ## Field Analysis  ·  *Team Report*
 
@@ -428,6 +470,31 @@ filters:
   whole possession that led to it
 - **Export as PNG**, which bakes in a small header summarizing exactly
   which filters were active
+
+- **Color by** also offers the tagged **hand**, **release** and **distance**
+  (untagged passes in grey)
+- A **pull map** — where our tagged pulls landed, with the out-of-bounds
+  rate and where out-of-bounds pulls were tapped in
+
+## Defense  ·  *Team Report*
+
+The defensive video tagging in one place, with a **games filter**:
+
+- **Schemes** — each opponent possession tagged with the defence we played:
+  how many we stopped (it ended in a turnover), how many they scored on, and
+  the stop rate. A last row covers possessions after they called a timeout.
+- **How they gave it back** — the opponents' turnovers, forced (our blocks)
+  vs. unforced, as pies by block type and by tagged turnover reason
+- **Blocks by player** — each player's blocks by tagged block type
+- **Pullers** — tagged pulls by who pulled: in and out of bounds, and how
+  often we broke (scored) on those points
+
+## My clips  ·  *Team Report*
+
+Pick a player to get every tagged moment they're in — throws, catches, blocks
+and pulls — grouped by game, each opening that game's video at that moment.
+Filter by **role** (Throws / Catches / Blocks / Pulls) and by **games**. Only
+tagged events with a video timestamp are listed.
 
 ## Gender Analysis  ·  *Team Report*
 

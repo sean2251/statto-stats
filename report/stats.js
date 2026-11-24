@@ -13,6 +13,9 @@
 //   StattoStats.reportFromStatto(arrayBuffer) -> Promise<{ report, teamName }>
 //   StattoStats.gameEvents(game) -> every taggable event of a report game
 //   StattoStats.taggedEvents(game, annotations) -> { tagged, total }
+//   StattoStats.ignoredEventIds(annotations) -> Set of ignored pass/block uuids
+//   StattoStats.eventEdits(annotations) -> "Edit" corrections, or null
+//   (reportFromStatto / computeTeamReport take { ignored, edits })
 (function (root, factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
@@ -635,7 +638,13 @@
     return out;
   }
 
-  function computeTeamReport(relations, teamName) {
+  // opts.ignored: uuids of passes and blocks to leave out entirely (events a
+  // tagger marked "Ignore this event"), as if Statto never recorded them.
+  // opts.edits: corrections a tagger made with "Edit" --
+  //   { passes: { <uuid>: { thrower, receiver } }, blocks: { <uuid>: { player } } }
+  // by player name -- applied as if Statto had recorded them that way.
+  function computeTeamReport(relations, teamName, opts) {
+    relations = withEdits(withoutIgnored(relations, opts && opts.ignored), opts && opts.edits);
     const players = get(relations, 'players', []);
     const playersByUuid = new Map(players.map(p => [p.uuid, p]));
     const playerGenders = {};
@@ -729,7 +738,33 @@
   }
 
   // render.build_report: the report for the export's (first) team.
-  async function reportFromStatto(buffer) {
+  function withoutIgnored(relations, ignored) {
+    if (!ignored || !ignored.size) return relations;
+    const keep = list => (Array.isArray(list) ? list : []).filter(x => !ignored.has(get(x, 'uuid', null)));
+    return Object.assign({}, relations, {
+      passes: keep(get(relations, 'passes', [])),
+      defensiveBlocks: keep(get(relations, 'defensiveBlocks', [])),
+    });
+  }
+
+  function withEdits(relations, edits) {
+    if (!edits) return relations;
+    const byName = new Map();
+    for (const p of get(relations, 'players', [])) { const n = get(p, 'name', null); if (n && !byName.has(n)) byName.set(n, p.uuid); }
+    const fix = (list, store, fields) => (Array.isArray(list) ? list : []).map(x => {
+      const e = store && store[get(x, 'uuid', null)];
+      if (!e) return x;
+      const out = Object.assign({}, x);
+      for (const [field, key] of fields) if (e[field] && byName.has(e[field])) out[key] = byName.get(e[field]);
+      return out;
+    });
+    return Object.assign({}, relations, {
+      passes: fix(get(relations, 'passes', []), edits.passes, [['thrower', 'throwerUUID'], ['receiver', 'receiverUUID']]),
+      defensiveBlocks: fix(get(relations, 'defensiveBlocks', []), edits.blocks, [['player', 'playerUUID']]),
+    });
+  }
+
+  async function reportFromStatto(buffer, opts) {
     const data = await readStatto(buffer);
     const teams = get(data, 'teams', []);
     if (!teams.length) throw new Error('No teams found in this .statto file.');
@@ -737,7 +772,7 @@
     const teamData = get(team, 'data', {});
     const relations = get(teamData, 'relations', {});
     const teamName = get(get(teamData, 'team', {}), 'name', 'Team');
-    return { report: computeTeamReport(relations, teamName), teamName };
+    return { report: computeTeamReport(relations, teamName, opts), teamName };
   }
 
 
@@ -843,12 +878,37 @@
   // How much of a game is tagged: every taggable event counts, and an event is
   // tagged once it has at least one field set -- the same rule as the tagging
   // page's "events tagged" (in its "All events" view).
+  // Ignored events ("Ignore this event") count as neither.
   function taggedEvents(game, ann) {
-    const events = gameEvents(game);
-    let tagged = 0;
-    events.forEach(ev => { const rec = eventRecord(ann || {}, ev); if (rec && Object.keys(rec).length) tagged++; });
-    return { tagged, total: events.length };
+    let tagged = 0, total = 0;
+    gameEvents(game).forEach(ev => {
+      const rec = eventRecord(ann || {}, ev);
+      if (rec && rec.ignored) return;
+      total++;
+      if (rec && Object.keys(rec).length) tagged++;
+    });
+    return { tagged, total };
+  }
+  // The "Edit" corrections in an annotation store, for opts.edits (null if none).
+  function eventEdits(ann) {
+    const out = { passes: {}, blocks: {} };
+    let n = 0;
+    for (const kind of ['passes', 'blocks']) {
+      const store = (ann && ann[kind]) || {};
+      Object.keys(store).forEach(k => { const e = store[k] && store[k].edit; if (e && typeof e === 'object' && Object.keys(e).length) { out[kind][k] = e; n++; } });
+    }
+    return n ? out : null;
+  }
+  // The passes and blocks marked "Ignore this event" in an annotation store:
+  // pass them to computeTeamReport / reportFromStatto as opts.ignored.
+  function ignoredEventIds(ann) {
+    const out = new Set();
+    for (const kind of ['passes', 'blocks']) {
+      const store = (ann && ann[kind]) || {};
+      Object.keys(store).forEach(k => { if (store[k] && store[k].ignored) out.add(k); });
+    }
+    return out;
   }
 
-  return { computeTeamReport, readStatto, reportFromStatto, fmtDisplayDate, pyRound, pointEvents, gameEvents, eventRecord, taggedEvents, _unzip: unzip };
+  return { computeTeamReport, readStatto, reportFromStatto, fmtDisplayDate, pyRound, pointEvents, gameEvents, eventRecord, taggedEvents, ignoredEventIds, eventEdits, _unzip: unzip };
 });

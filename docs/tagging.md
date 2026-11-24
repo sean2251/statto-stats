@@ -105,6 +105,33 @@ between the two at any time without losing tags. The counters (`3 / 56` and the
    YouTube link yet; you can type the time as `mm:ss` instead.)
 4. Press **→** for the next pass and repeat.
 
+## Timeouts
+
+On a pass, **Out of timeout** (just above Ignore this event) marks it as the
+first throw coming out of a timeout we called. Click it again to clear it.
+It shows with the pass's other tags and can be filtered on in the tag search.
+
+On a defensive possession, **Opponent called timeout** (in the same place)
+marks that they called a timeout during it.
+
+## Ignoring an event
+
+Some passes are wrong, or only there because Statto needed them to make a
+point add up. At the bottom of every event's tag panel is **Ignore this
+event**: an ignored event is left out of every stat (completion rates and
+all), of the tag counts, of exports and of the Team Report once it's
+published again. If it's an assist or a turnover, that assist (and the goal)
+or turnover goes too; the panel says so. **Stop ignoring this event** puts it
+back. Its tags are kept either way.
+
+## Correcting who threw, caught or got the D
+
+Statto got a player wrong? On a pass or a block, **Edit** (below Ignore this
+event) opens the **Thrower** and **Receiver** (or **Got the D**) choices,
+listing that point's line first. Every stat credits the corrected player once
+the Team Report is published again; **Back to what Statto has** undoes it.
+(Who pulled is the pull's own **Puller** field: Statto doesn't record it.)
+
 ## Keyboard shortcuts
 
 Most throws are one of a handful of common types, so the number keys fill those

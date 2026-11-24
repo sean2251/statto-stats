@@ -322,10 +322,12 @@ function buildNav() {
     nav.appendChild(buildGamesNavDropdown());
     // The Data Editor becomes a read-only "Film Clips" browser here.
     nav.appendChild(el('button', { class: 'tab', 'data-target': 'data-editor' }, [document.createTextNode('Film Clips')]));
+    nav.appendChild(el('button', { class: 'tab', 'data-target': 'my-clips' }, [document.createTextNode('My clips')]));
     nav.appendChild(el('button', { class: 'tab', 'data-target': 'player-analysis' }, [document.createTextNode('Player Analysis')]));
     nav.appendChild(el('button', { class: 'tab', 'data-target': 'line-analysis' }, [document.createTextNode('Line Analysis')]));
     nav.appendChild(el('button', { class: 'tab', 'data-target': 'thrower-receiver-analysis' }, [document.createTextNode('Thrower-Receiver Analysis')]));
     nav.appendChild(el('button', { class: 'tab', 'data-target': 'field-analysis' }, [document.createTextNode('Field Analysis')]));
+    nav.appendChild(el('button', { class: 'tab', 'data-target': 'defense' }, [document.createTextNode('Defense')]));
     nav.appendChild(el('button', { class: 'tab', 'data-target': 'gender-analysis' }, [document.createTextNode('Gender Analysis')]));
     nav.appendChild(el('button', { class: 'tab', 'data-target': 'time-series' }, [document.createTextNode('Time Series')]));
     nav.appendChild(el('button', { class: 'tab', 'data-target': 'advanced-stats' }, [document.createTextNode('Advanced Stats')]));
@@ -1079,16 +1081,23 @@ function renderPoint(routeLayer, point, focusPossession) {
     c.appendChild(title);
   });
 
-  // Where our pull landed, when the point's pull has been tagged with a spot.
-  // Teal ring + dot, matching the Data Editor's own pull marker.
+  // Where our pull landed (or, out of bounds, was tapped in), when the point's
+  // pull has been tagged with a spot -- matching the tagging page's markers.
   if (!point.isOffense && point.uuid) {
     const pull = (ann.points || {})[point.uuid + '#pull'];
-    if (pull && !pull.outOfBounds && pull.landX != null && pull.landY != null) {
-      const cx = pull.landX * PITCH_W, cy = pull.landY * PITCH_H;
-      const ring = svgEl('circle', { cx, cy, r: 8, fill: 'none', stroke: '#4FD1AE', 'stroke-width': 1.6, opacity: 0 });
-      const dot = svgEl('circle', { cx, cy, r: 3, fill: '#4FD1AE', stroke: '#0E2426', 'stroke-width': 1, opacity: 0 });
+    // In bounds: where it landed (teal). Out of bounds: where the disc was
+    // tapped in (amber, dashed), so the two are never confused.
+    const oob = !!(pull && pull.outOfBounds && pull.tapInY != null);
+    const spot = !pull ? null : oob ? [PULL_TAP_IN_X, pull.tapInY]
+      : (!pull.outOfBounds && pull.landX != null && pull.landY != null) ? [pull.landX, pull.landY] : null;
+    if (spot) {
+      const cx = spot[0] * PITCH_W, cy = spot[1] * PITCH_H;
+      const colour = oob ? '#E3B341' : '#4FD1AE';
+      const ring = svgEl('circle', Object.assign({ cx, cy, r: 8, fill: 'none', stroke: colour, 'stroke-width': 1.6, opacity: 0 },
+        oob ? { 'stroke-dasharray': '4 3' } : {}));
+      const dot = svgEl('circle', { cx, cy, r: 3, fill: colour, stroke: '#0E2426', 'stroke-width': 1, opacity: 0 });
       const t = svgEl('title', {});
-      t.textContent = 'Pull' + (pull.puller ? ' by ' + pull.puller : '') + ' — landed here';
+      t.textContent = 'Pull' + (pull.puller ? ' by ' + pull.puller : '') + (oob ? ' — out of bounds, tapped in here' : ' — landed here');
       dot.appendChild(t);
       routeLayer.appendChild(ring);
       routeLayer.appendChild(dot);
@@ -1656,6 +1665,8 @@ function buildFieldAnalysisSection() {
   section.appendChild(layout);
   const legendHolder = el('div', {}, []);
   section.appendChild(legendHolder);
+  // Our pulls, from the video tagging (shown once any is tagged).
+  const pullHolder = el('div', {}, []);
 
   // Remembered video width (drag to resize).
   const FA_VIDEO_SIZE_KEY = 'statto-report-fa-video-width::' + REPORT.teamName;
@@ -1729,7 +1740,7 @@ function buildFieldAnalysisSection() {
     if (['combined', 'offense', 'defense'].includes(shared.pointType)) pointTypeFilter = shared.pointType;
     if (shared.possession === 'final' || shared.possession === 'possession') possessionMode = shared.possession;
     if (shared.field === 'full' || shared.field === 'redzone') fieldMode = shared.field;
-    if (['outcome', 'thrower', 'receiver', 'game'].includes(shared.colorBy)) colorBy = shared.colorBy;
+    if (['outcome', 'thrower', 'receiver', 'game', 'hand', 'release', 'distance'].includes(shared.colorBy)) colorBy = shared.colorBy;
     if (shared.video) videoMode = true;
   }
   videoCol.style.display = videoMode ? '' : 'none';
@@ -1737,14 +1748,23 @@ function buildFieldAnalysisSection() {
   // Colour scheme for a "Color by" mode: assign each distinct value on the
   // diagram a palette colour (green/red-free, so a route never reads as an
   // outcome) and build the matching legend.
+  // Colour by a video tag (hand / release / distance): each throw's tagged
+  // value, in the vocabulary's order, with untagged throws in grey.
+  const TAG_COLOR_FIELDS = ['hand', 'release', 'distance'];
   function fieldColorScheme(passes) {
-    const keyFor = (p, gi) => colorBy === 'thrower' ? (p.thrower || '?') : colorBy === 'receiver' ? (p.receiver || '?') : String(gi);
+    const byTag = TAG_COLOR_FIELDS.includes(colorBy);
+    const ann = byTag ? loadAnnotations() : null;
+    const tagOf = p => { const r = annotationRecordFor(ann, { kind: 'pass', uuid: p.uuid }); return (r && r[colorBy]) || 'Not tagged'; };
+    const keyFor = (p, gi) => byTag ? tagOf(p) : colorBy === 'thrower' ? (p.thrower || '?') : colorBy === 'receiver' ? (p.receiver || '?') : String(gi);
     const labelFor = (k) => colorBy === 'game' ? ('vs ' + (REPORT.games[Number(k)] ? REPORT.games[Number(k)].opponent : '?')) : k;
     const seen = [];
     passes.forEach(({ pass: p, gameIndex }) => { const k = keyFor(p, gameIndex); if (!seen.includes(k)) seen.push(k); });
-    seen.sort((a, b) => colorBy === 'game' ? Number(a) - Number(b) : a.localeCompare(b));
+    const vocab = byTag ? ANNOTATION_VOCAB[colorBy] : null;
+    const rank = k => k === 'Not tagged' ? 999 : (vocab.indexOf(k) < 0 ? 500 : vocab.indexOf(k));
+    seen.sort((a, b) => byTag ? rank(a) - rank(b) : colorBy === 'game' ? Number(a) - Number(b) : a.localeCompare(b));
     const colorMap = {};
-    seen.forEach((k, i) => { colorMap[k] = FIELD_COLORBY_COLORS[i % FIELD_COLORBY_COLORS.length]; });
+    seen.filter(k => !(byTag && k === 'Not tagged')).forEach((k, i) => { colorMap[k] = FIELD_COLORBY_COLORS[i % FIELD_COLORBY_COLORS.length]; });
+    if (byTag) colorMap['Not tagged'] = 'var(--chalk-dim)';
     return {
       colorFn: (p, gi) => colorMap[keyFor(p, gi)] || 'var(--chalk)',
       legend: buildFieldColorLegend(seen.map(k => ({ color: colorMap[k], label: labelFor(k) }))),
@@ -1763,6 +1783,9 @@ function buildFieldAnalysisSection() {
       legendHolder.appendChild(scheme.legend);
     }
     renderPlayerImpact(routeLayer, passes, blocks, impactOpts);
+    pullHolder.innerHTML = '';
+    const pullMap = buildPullMap(selectedGames);
+    if (pullMap) pullHolder.appendChild(pullMap);
   }
 
   const categoryControl = buildImpactCategoryDropdown((cats) => { categories = cats; render(); }, null, { initialSelected: [...categories] });
@@ -1799,6 +1822,9 @@ function buildFieldAnalysisSection() {
       { key: 'thrower', label: 'Thrower' },
       { key: 'receiver', label: 'Receiver' },
       { key: 'game', label: 'Game' },
+      { key: 'hand', label: 'Hand' },
+      { key: 'release', label: 'Release' },
+      { key: 'distance', label: 'Distance' },
     ], (key) => { colorBy = key; render(); }, colorBy),
   ]));
   controlsRow.appendChild(el('label', { class: 'ts-field' }, [
@@ -1859,9 +1885,45 @@ function buildFieldAnalysisSection() {
     return st;
   }));
 
+  section.appendChild(pullHolder);
   updateControlAvailability();
   render();
   return section;
+}
+
+// Where our pulls went (the games chosen), from the video tagging: in-bounds
+// landing spots and out-of-bounds tap-in spots on one field, with the counts.
+// Null when no pull is tagged.
+function buildPullMap(gameIndices) {
+  const pulls = filmEvents(gameIndices).filter(e => e.ev.kind === 'pull');
+  const tagged = pulls.filter(e => e.rec);
+  if (!tagged.length) return null;
+  const inb = tagged.filter(e => !e.rec.outOfBounds && e.rec.landX != null && e.rec.landY != null);
+  const oob = tagged.filter(e => e.rec.outOfBounds);
+  const { svg, routeLayer } = buildPitch();
+  svg.style.maxWidth = '240px';
+  const dot = (e, x, y, isOob) => {
+    const cx = x * PITCH_W, cy = y * PITCH_H;
+    const g = svgEl('g', {});
+    if (isOob) g.appendChild(svgEl('circle', { cx, cy, r: 8, fill: 'none', stroke: '#E3B341', 'stroke-width': 1.6, 'stroke-dasharray': '4 3' }));
+    g.appendChild(svgEl('circle', { cx, cy, r: 4, fill: isOob ? '#E3B341' : '#4FD1AE', stroke: '#0E2426', 'stroke-width': 1 }));
+    const t = svgEl('title', {});
+    t.textContent = 'vs ' + e.game.opponent + ' · Pt ' + e.pt.number + (e.rec.puller ? ' · ' + e.rec.puller : '') + (isOob ? ' · out of bounds, tapped in here' : ' · landed here');
+    g.appendChild(t);
+    routeLayer.appendChild(g);
+  };
+  inb.forEach(e => dot(e, e.rec.landX, e.rec.landY, false));
+  oob.filter(e => e.rec.tapInY != null).forEach(e => dot(e, PULL_TAP_IN_X, e.rec.tapInY, true));
+  const stat = (label, value) => el('div', { class: 'pull-stat' }, [el('div', { class: 'pull-stat-value' }, [document.createTextNode(value)]), el('div', { class: 'pull-stat-label' }, [document.createTextNode(label)])]);
+  return el('div', {}, [
+    el('h2', { class: 'section-title' }, [document.createTextNode('Our pulls')]),
+    el('p', { class: 'pitch-caption' }, [document.createTextNode('From the video tagging: where our pulls landed (teal) and, for the ones that went out of bounds, where the disc was tapped in (amber, dashed). Hover a spot for the game, point and puller. Who pulled best is on the Defense tab.')]),
+    el('div', { class: 'pull-map' }, [svg, el('div', { class: 'pull-stats' }, [
+      stat('pulls tagged', tagged.length + ' of ' + pulls.length),
+      stat('in bounds', String(tagged.length - oob.length)),
+      stat('out of bounds', oob.length + (tagged.length ? ' (' + Math.round(100 * oob.length / tagged.length) + '%)' : '')),
+    ])]),
+  ]);
 }
 
 // Rasterizes the current field diagram plus a small header summarizing the
@@ -2521,6 +2583,257 @@ function buildDiffChart(points) {
   return { svg, dotsByNumber };
 }
 
+// ---------- From the film: the video tagging, across the Team Report ----------
+function filmPct(c, a) { return a ? Math.round(100 * c / a) : null; }
+function filmVideoId(gi) { return parseYouTubeId(loadSetupData().videoLinks[gi]); }
+// A clip: a link to that moment in the game's video, or plain text without one.
+function filmClipEl(gi, ts, label) {
+  const vid = filmVideoId(gi);
+  const hasTs = ts != null && isFinite(Number(ts));
+  const text = label + (hasTs ? ' · ' + formatTimestamp(Number(ts)) : '');
+  return (vid && hasTs)
+    ? el('a', { href: youtubeTimestampUrl(vid, Math.max(0, Math.floor(Number(ts)))), target: '_blank', rel: 'noopener noreferrer', class: 'film-clip' }, [document.createTextNode('▶ ' + text)])
+    : el('span', { class: 'film-clip none' }, [document.createTextNode(text)]);
+}
+// Every event of the chosen games, with its tag record (null when untagged or
+// ignored): { gi, game, pt, ev, rec }.
+function filmEvents(gameIndices) {
+  const ann = loadAnnotations();
+  const out = [];
+  gameIndices.forEach(gi => {
+    const game = REPORT.games[gi];
+    (game.points || []).forEach(pt => buildPointEvents(pt).forEach(ev => {
+      const rec = annotationRecordFor(ann, ev);
+      out.push({ gi, game, pt, ev, rec: rec && Object.keys(rec).length ? rec : null });
+    }));
+  });
+  return out;
+}
+// Throws grouped by their tags, for completion rates.
+const FILM_THROW_GROUPS = [
+  { label: 'Backhands', test: r => r.hand === 'Backhand' || r.hand === 'Offhand backhand' },
+  { label: 'Flicks', test: r => r.hand === 'Flick' },
+  { label: 'Hammers & scoobers', test: r => r.hand === 'Hammer' || r.hand === 'Scoober' },
+  { label: 'Break throws', test: r => r.release === 'Breakside around' || r.release === 'Breakside inside' },
+  { label: 'Hucks', test: r => r.distance === 'Huck' },
+  { label: 'Resets', test: r => r.distance === 'Reset' },
+];
+// The throws matching match(pass): how many, how many tagged, completion by
+// FILM_THROW_GROUPS, and their turnovers' reasons.
+function filmThrowProfile(events, match) {
+  const prof = { throws: 0, tagged: 0, groups: FILM_THROW_GROUPS.map(() => ({ att: 0, comp: 0 })), reasons: new Map() };
+  events.forEach(e => {
+    if (e.ev.kind !== 'pass' || !match(e.ev.item)) return;
+    const p = e.ev.item;
+    prof.throws++;
+    if (!e.rec) return;
+    prof.tagged++;
+    FILM_THROW_GROUPS.forEach((g, i) => { if (g.test(e.rec)) { prof.groups[i].att++; if (!p.turnover) prof.groups[i].comp++; } });
+    if (p.turnover) [].concat(e.rec.turnoverReason || []).filter(Boolean).forEach(r => prof.reasons.set(r, (prof.reasons.get(r) || 0) + 1));
+  });
+  return prof;
+}
+// Comparison-table rows for a profile (get(column) -> profile).
+function filmProfileRows(get) {
+  return [
+    { label: 'Throws tagged', tip: 'Throws with at least one video tag. The rates below count tagged throws only.', main: x => fmtPct(filmPct(get(x).tagged, get(x).throws)), sub: x => `${get(x).tagged}/${get(x).throws}` },
+  ].concat(FILM_THROW_GROUPS.map((g, i) => ({
+    label: g.label + ' completed',
+    main: x => fmtPct(filmPct(get(x).groups[i].comp, get(x).groups[i].att)),
+    sub: x => `${get(x).groups[i].comp}/${get(x).groups[i].att}`,
+  }))).concat([
+    { label: 'Turnover reasons', render: x => filmCountList(get(x).reasons, 4) },
+  ]);
+}
+// "Drop ×3" lines for the biggest counts in a Map.
+function filmCountList(map, max) {
+  const items = [...map.entries()].sort((a, b) => b[1] - a[1]);
+  if (!items.length) return el('span', { class: 'film-dim' }, [document.createTextNode('–')]);
+  const shown = items.slice(0, max).map(([k, n]) => el('div', { class: 'film-count' }, [document.createTextNode(k + ' ×' + n)]));
+  if (items.length > max) shown.push(el('div', { class: 'film-dim' }, [document.createTextNode('+' + (items.length - max) + ' more')]));
+  return el('div', {}, shown);
+}
+// Up to `max` clip links (for a comparison-table cell).
+function filmClipList(list, max) {
+  if (!list.length) return el('span', { class: 'film-dim' }, [document.createTextNode('–')]);
+  const out = list.slice(0, max).map(c => filmClipEl(c.gi, c.ts, c.label));
+  if (list.length > max) out.push(el('span', { class: 'film-dim' }, [document.createTextNode('+' + (list.length - max) + ' more in My clips')]));
+  return el('div', { class: 'film-clip-list' }, out);
+}
+function passOutcomeWord(p) {
+  return p.assist ? 'Assist' : (p.throwerError && p.receiverError) ? 'Throwaway + drop' : p.throwerError ? 'Throwaway' : p.receiverError ? 'Drop' : 'Completed';
+}
+
+// ---------- Turnovers by type (a game page, from the video tagging) ----------
+// Ours: each turnover pass's tagged reason(s) -- a turnover can have more than
+// one, so the slices count reasons and can add up to more than the turnovers.
+// Theirs: every opponent turnover once -- our blocks by block type, their
+// unforced errors by type. Untagged ones are a "Not tagged" slice.
+const PIE_MAX_NAMED = 5;
+function gameTurnoverBreakdown(games) {
+  const ann = loadAnnotations();
+  const ours = new Map(), theirs = new Map();
+  let ourTurnovers = 0, ourUntagged = 0, theirTurnovers = 0, theirUntagged = 0;
+  const add = (m, k) => m.set(k, (m.get(k) || 0) + 1);
+  [].concat(games).forEach(game => (game.points || []).forEach(pt => {
+    buildPointEvents(pt).forEach(ev => {
+      const rec = annotationRecordFor(ann, ev);
+      if (ev.kind === 'pass' && ev.item.turnover) {
+        ourTurnovers++;
+        const reasons = rec && rec.turnoverReason ? [].concat(rec.turnoverReason).filter(Boolean) : [];
+        if (reasons.length) reasons.forEach(r => add(ours, r)); else ourUntagged++;
+      } else if (ev.kind === 'block') {
+        theirTurnovers++;
+        if (rec && rec.type) add(theirs, rec.type); else theirUntagged++;
+      } else if (ev.kind === 'oppTurn') {
+        theirTurnovers++;
+        if (rec && rec.oppTurnover) add(theirs, rec.oppTurnover); else theirUntagged++;
+      }
+    });
+  }));
+  return {
+    ours: { total: ourTurnovers, counts: ours, untagged: ourUntagged, order: ANNOTATION_VOCAB.turnoverReason },
+    theirs: { total: theirTurnovers, counts: theirs, untagged: theirUntagged, order: BLOCK_VOCAB.type.concat(POINT_VOCAB.oppTurnover) },
+  };
+}
+// Slices for one pie: the most common categories (at most PIE_MAX_NAMED, each
+// with its own colour, assigned in the vocabulary's order so a pie's colours
+// never depend on rank), then "Other", then "Not tagged".
+function turnoverPieSlices(side) {
+  const named = [...side.counts.entries()].sort((a, b) => b[1] - a[1] || side.order.indexOf(a[0]) - side.order.indexOf(b[0]));
+  const shown = named.slice(0, PIE_MAX_NAMED).map(x => x[0]);
+  const ordered = side.order.filter(k => shown.includes(k)).concat(shown.filter(k => !side.order.includes(k)));
+  const slices = ordered.map((k, i) => ({ label: k, value: side.counts.get(k), color: 'var(--pie-' + (i + 1) + ')' }));
+  const other = named.slice(PIE_MAX_NAMED).reduce((n, x) => n + x[1], 0);
+  if (other) slices.push({ label: 'Other', value: other, color: 'var(--pie-other)' });
+  if (side.untagged) slices.push({ label: 'Not tagged', value: side.untagged, color: 'var(--pie-none)', hatch: true });
+  return slices;
+}
+function buildDonut(slices, centerBig, centerSmall, ariaLabel) {
+  const size = 168, r = 74, rIn = 48, c = size / 2;
+  const svg = svgEl('svg', { viewBox: `0 0 ${size} ${size}`, width: size, height: size, role: 'img', 'aria-label': ariaLabel, class: 'pie-svg' });
+  const total = slices.reduce((n, sl) => n + sl.value, 0);
+  let a0 = -Math.PI / 2;
+  const pt = (rad, a) => [c + rad * Math.cos(a), c + rad * Math.sin(a)];
+  slices.forEach(sl => {
+    const frac = sl.value / total;
+    const a1 = a0 + frac * 2 * Math.PI;
+    let d;
+    if (frac >= 0.9999) {
+      // A whole ring: two half-arcs (a single full arc doesn't draw).
+      d = `M ${c} ${c - r} A ${r} ${r} 0 1 1 ${c} ${c + r} A ${r} ${r} 0 1 1 ${c} ${c - r} M ${c} ${c - rIn} A ${rIn} ${rIn} 0 1 0 ${c} ${c + rIn} A ${rIn} ${rIn} 0 1 0 ${c} ${c - rIn} Z`;
+    } else {
+      const large = (a1 - a0) > Math.PI ? 1 : 0;
+      const [x0, y0] = pt(r, a0), [x1, y1] = pt(r, a1), [x2, y2] = pt(rIn, a1), [x3, y3] = pt(rIn, a0);
+      d = `M ${x0} ${y0} A ${r} ${r} 0 ${large} 1 ${x1} ${y1} L ${x2} ${y2} A ${rIn} ${rIn} 0 ${large} 0 ${x3} ${y3} Z`;
+    }
+    const path = svgEl('path', { d, fill: sl.hatch ? 'url(#pie-hatch)' : sl.color, class: 'pie-slice', 'fill-rule': 'evenodd' });
+    const t = svgEl('title', {});
+    t.textContent = `${sl.label}: ${sl.value} (${Math.round(100 * frac)}%)`;
+    path.appendChild(t);
+    svg.appendChild(path);
+    a0 = a1;
+  });
+  const big = svgEl('text', { x: c, y: c + 2, 'text-anchor': 'middle', class: 'pie-center-big' });
+  big.textContent = centerBig;
+  const small = svgEl('text', { x: c, y: c + 20, 'text-anchor': 'middle', class: 'pie-center-small' });
+  small.textContent = centerSmall;
+  svg.appendChild(big); svg.appendChild(small);
+  return svg;
+}
+// Our turnover reasons game by game (games in date order, as columns), so a
+// trend shows: a reason that keeps growing, or one that went away. Null when
+// none is tagged.
+// The opponent's possessions on these points ({ gameIndex, point } list), by
+// our tagged defensive scheme: how many, and how many we stopped (a turnover,
+// rather than their goal). A possession ends in their goal only when it's the
+// last one of a point they scored.
+function defenseBySchemeFor(points) {
+  const ann = loadAnnotations();
+  const out = { possessions: 0, tagged: 0, byScheme: new Map(), oppTimeouts: { n: 0, stops: 0 } };
+  points.forEach(({ point: pt }) => {
+    const n = pt.defensivePossessions || 0;
+    for (let d = 1; d <= n; d++) {
+      out.possessions++;
+      const rec = annotationRecordFor(ann, { kind: 'def', uuid: pt.uuid + '#d' + d });
+      const stopped = !(pt.result === -1 && d === n);
+      if (rec && rec.oppTimeout) { out.oppTimeouts.n++; if (stopped) out.oppTimeouts.stops++; }
+      if (!rec || !rec.defScheme) continue;
+      out.tagged++;
+      const t = out.byScheme.get(rec.defScheme) || { n: 0, stops: 0 };
+      t.n++; if (stopped) t.stops++;
+      out.byScheme.set(rec.defScheme, t);
+    }
+  });
+  return out;
+}
+
+function buildTurnoverReasonTrend(gameIndices) {
+  const perGame = gameIndices.map(gi => ({ gi, b: gameTurnoverBreakdown([REPORT.games[gi]]).ours }));
+  const totals = new Map();
+  perGame.forEach(({ b }) => b.counts.forEach((n, k) => totals.set(k, (totals.get(k) || 0) + n)));
+  if (!totals.size) return null;
+  const reasons = [...totals.entries()].sort((a, b) => b[1] - a[1]).map(x => x[0]);
+  const max = Math.max(...perGame.flatMap(({ b }) => [...b.counts.values()]));
+  const cell = (n) => {
+    const td = el('td', { class: 'trend-cell' }, [document.createTextNode(n ? String(n) : '·')]);
+    // A faint fill that deepens with the count, so the eye finds the hot spots.
+    if (n) td.style.background = `rgba(var(--bad-rgb), ${(0.12 + 0.5 * n / max).toFixed(2)})`;
+    return td;
+  };
+  const table = el('table', { class: 'stats trend-table' }, [
+    el('thead', {}, [el('tr', {}, [el('th', { class: 'row-label' }, [document.createTextNode('Reason')])].concat(
+      perGame.map(({ gi }) => el('th', { title: REPORT.games[gi].dateDisplay }, [document.createTextNode('vs ' + REPORT.games[gi].opponent)])),
+      [el('th', {}, [document.createTextNode('Total')])]))]),
+    el('tbody', {}, reasons.map(r => el('tr', {}, [el('td', { class: 'row-label' }, [document.createTextNode(r)])].concat(
+      perGame.map(({ b }) => cell(b.counts.get(r) || 0)), [el('td', { class: 'trend-total' }, [document.createTextNode(String(totals.get(r)))])]))).concat([
+      el('tr', { class: 'trend-foot' }, [el('td', { class: 'row-label' }, [document.createTextNode('Turnovers (not tagged)')])].concat(
+        perGame.map(({ b }) => el('td', {}, [document.createTextNode(b.total + (b.untagged ? ' (' + b.untagged + ')' : ''))])),
+        [el('td', { class: 'trend-total' }, [document.createTextNode(String(perGame.reduce((n, { b }) => n + b.total, 0)))])])),
+    ])),
+  ]);
+  return el('div', { class: 'table-scroll' }, [table]);
+}
+
+// The two pies, side by side, for one game or several -- or null when none of
+// their turnovers has been tagged (a single "Not tagged" ring says nothing).
+// opts.theirLabel: the opponent's pie title; opts.only: 'ours' | 'theirs'.
+function buildTurnoverTypeCharts(games, opts) {
+  opts = opts || {};
+  const b = gameTurnoverBreakdown(games);
+  if (!b.ours.counts.size && !b.theirs.counts.size) return null;
+  const wrap = el('div', { class: 'pie-pair' }, []);
+  // One hatch pattern for "Not tagged", shared by both pies on the page.
+  if (!document.getElementById('pie-hatch')) {
+    const defs = svgEl('svg', { width: 0, height: 0, style: 'position:absolute', 'aria-hidden': 'true' });
+    defs.innerHTML = '<defs><pattern id="pie-hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">' +
+      '<rect width="6" height="6" fill="var(--pie-none)"/><line x1="0" y1="0" x2="0" y2="6" stroke="var(--pie-none-line)" stroke-width="2"/></pattern></defs>';
+    wrap.appendChild(defs);
+  }
+  [['ours', 'Our turnovers', 'turnovers', 'reasons'], ['theirs', opts.theirLabel || 'Their turnovers', 'turnovers', null]].filter(x => !opts.only || x[0] === opts.only).forEach(([key, title, word, unit]) => {
+    const side = b[key];
+    const card = el('div', { class: 'pie-card' }, [el('div', { class: 'pie-title' }, [document.createTextNode(title)])]);
+    if (!side.total) {
+      card.appendChild(el('p', { class: 'pitch-caption' }, [document.createTextNode('None.')]));
+    } else if (!side.counts.size) {
+      card.appendChild(el('p', { class: 'pitch-caption' }, [document.createTextNode(side.total + ' ' + word + ', none tagged yet.')]));
+    } else {
+      const slices = turnoverPieSlices(side);
+      const sum = slices.reduce((n, sl) => n + sl.value, 0);
+      card.appendChild(buildDonut(slices, String(side.total), word, title + ': ' + slices.map(sl => sl.label + ' ' + sl.value).join(', ')));
+      const legend = el('ul', { class: 'pie-legend' }, slices.map(sl => el('li', {}, [
+        el('span', { class: 'pie-swatch' + (sl.hatch ? ' hatch' : ''), style: sl.hatch ? '' : 'background:' + sl.color }, []),
+        el('span', { class: 'pie-label' }, [document.createTextNode(sl.label)]),
+        el('span', { class: 'pie-value' }, [document.createTextNode(sl.value + ' · ' + Math.round(100 * sl.value / sum) + '%')]),
+      ])));
+      card.appendChild(legend);
+      if (unit && sum !== side.total) card.appendChild(el('p', { class: 'pie-note' }, [document.createTextNode('A turnover can have more than one reason, so the slices count ' + unit + ' (' + sum + '), not turnovers.')]));
+    }
+    wrap.appendChild(card);
+  });
+  return wrap;
+}
+
 function buildGameSection(game, index) {
   const section = el('section', { class: 'view', id: 'game-' + index }, []);
   const eyebrow = el('p', { class: 'eyebrow' }, [document.createTextNode(game.dateDisplay + ' \u00b7 ' + (game.result === 'W' ? 'Win' : game.result === 'L' ? 'Loss' : 'Tie'))]);
@@ -2557,6 +2870,14 @@ function buildGameSection(game, index) {
 
   section.appendChild(el('h2', { class: 'section-title' }, [document.createTextNode('Scoring Efficiency')]));
   section.appendChild(buildScoringEfficiencyWidget(game.summary.scoringEfficiency));
+
+  // How the game's turnovers happened, from the video tagging (shown once
+  // any of them is tagged).
+  const turnoverCharts = buildTurnoverTypeCharts([game], { theirLabel: game.opponent + '’s turnovers' });
+  if (turnoverCharts) {
+    section.appendChild(el('h2', { class: 'section-title' }, [document.createTextNode('Turnovers by type')]));
+    section.appendChild(turnoverCharts);
+  }
 
   section.appendChild(el('h2', { class: 'section-title' }, [document.createTextNode('Point differential')]));
   const diffChart = buildDiffChart(game.points);
@@ -3569,6 +3890,33 @@ function buildPlayerAnalysisSection() {
     )]));
     contentArea.appendChild(buildConnectionsSection(players, selectedGames));
 
+    // From the film: what the video tagging says about each player's throwing.
+    const events = filmEvents(selectedGames);
+    if (events.some(e => e.rec)) {
+      contentArea.appendChild(el('h2', { class: 'section-title' }, [document.createTextNode('From the film')]));
+      contentArea.appendChild(el('p', { class: 'pitch-caption' }, [document.createTextNode(
+        'From the video tagging: each player’s completion rate by throw type (tagged throws only), the reasons for their turnovers, and links to their throwaways and drops in the game video.'
+      )]));
+      const film = selectedPlayers.map(name => {
+        const clip = e => ({ gi: e.gi, ts: e.rec && e.rec.timestamp, label: 'vs ' + e.game.opponent + ' · Pt ' + e.pt.number + ' · ' + passOutcomeWord(e.ev.item) +
+          (e.rec && e.rec.turnoverReason && [].concat(e.rec.turnoverReason).length ? ' (' + [].concat(e.rec.turnoverReason).join(', ') + ')' : '') });
+        const giveaways = events.filter(e => e.ev.kind === 'pass' && e.ev.item.thrower === name && e.ev.item.throwerError);
+        const drops = events.filter(e => e.ev.kind === 'pass' && e.ev.item.receiver === name && e.ev.item.receiverError);
+        return {
+          player: name,
+          film: filmThrowProfile(events, p => p.thrower === name),
+          drops: drops.length,
+          dropsTagged: drops.filter(e => e.rec).length,
+          clips: giveaways.concat(drops).filter(e => e.rec && e.rec.timestamp != null).map(clip),
+        };
+      });
+      const rows = filmProfileRows(x => x.film).concat([
+        { label: 'Drops (as receiver)', get: x => x.drops },
+        { label: 'Throwaways & drops on film', render: x => filmClipList(x.clips, 5) },
+      ]);
+      contentArea.appendChild(buildComparisonTable(rows, film, 'player'));
+    }
+
     contentArea.appendChild(buildImpactSection(players, selectedGames));
   }
 
@@ -4210,6 +4558,29 @@ function buildSeasonSection() {
   section.appendChild(el('h2', { class: 'section-title' }, [document.createTextNode('Clutch Efficiency')]));
   section.appendChild(buildClutchEfficiencyWidget(REPORT.seasonClutchEfficiency));
 
+  // Turnovers by type, from the video tagging (once any is tagged): the same
+  // pies as a game page, for the games chosen, and how each reason trends.
+  const allGames = REPORT.games.map((g, i) => i);
+  if (buildTurnoverTypeCharts(REPORT.games)) {
+    const toHeader = el('div', { class: 'section-title-row' }, [el('span', {}, [document.createTextNode('Turnovers by type')])]);
+    const toHolder = el('div', {}, []);
+    const renderTurnovers = (indices) => {
+      toHolder.innerHTML = '';
+      const games = indices.map(i => REPORT.games[i]);
+      const charts = buildTurnoverTypeCharts(games, { theirLabel: 'Opponents’ turnovers' });
+      toHolder.appendChild(charts || el('p', { class: 'pitch-caption' }, [document.createTextNode('None of these games’ turnovers is tagged yet.')]));
+      const trend = buildTurnoverReasonTrend(indices);
+      if (trend) {
+        toHolder.appendChild(el('h3', { class: 'film-subtitle' }, [document.createTextNode('Turnover reasons by game')]));
+        toHolder.appendChild(trend);
+      }
+    };
+    toHeader.appendChild(buildGameFilterDropdown(renderTurnovers));
+    section.appendChild(toHeader);
+    section.appendChild(toHolder);
+    renderTurnovers(allGames);
+  }
+
   const leaderboardHeader = el('div', { class: 'section-title-row' }, [
     el('span', {}, [document.createTextNode('Season leaderboard')]),
   ]);
@@ -4511,6 +4882,10 @@ const POINT_VOCAB = {
   oppTurnover: ['Huck turnover', 'Throwing error', 'Receiver error'],
 };
 
+// An out-of-bounds pull is brought into play in the middle of the field's
+// width: its tap-in spot (tapInX/tapInY on the pull's tag) always has this x.
+const PULL_TAP_IN_X = 0.5;
+
 // The defences a team can choose from on Season setup's Set up tab; the team
 // ticks the ones it plays and can add its own. Tagging a defensive possession
 // offers exactly the team's list.
@@ -4660,7 +5035,9 @@ function buildDistributableHtml(opts) {
   // Seeded under the plain (un-suffixed) key names the published page reads --
   // in the local app this editor's own keys carry a per-season suffix.
   [setupStorageKey(), linesStorageKey(), annotationsStorageKey()].forEach(k => {
-    const v = localStorage.getItem(k);
+    let v = localStorage.getItem(k);
+    // A Team Report carries no trace of events marked "Ignore this event".
+    if (v !== null && opts.viewer && k === annotationsStorageKey()) v = JSON.stringify(withoutIgnoredTags(JSON.parse(v)));
     if (v !== null) seed[canonicalStorageKey(k)] = v;
   });
   // A Team Report always takes its own setup and tags over anything an older
@@ -4685,6 +5062,11 @@ function buildDistributableHtml(opts) {
   // Override the browser tab title so otherwise-identical builds (e.g. a
   // per-opponent tagging page) don't all read the same. The parent report's
   // title is baked into the pristine HTML, so rewrite the whole <title> tag.
+  // The report data itself, when the caller rebuilt it (ignored events left out).
+  if (opts.report) {
+    const data = JSON.stringify(opts.report).replace(/</g, '\\u003c');
+    html = html.replace(/(<script id="report-data" type="application\/json">)[\s\S]*?(<\/script>)/, (m, a, b) => a + data + b);
+  }
   if (opts.title) {
     const safe = String(opts.title).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     html = html.replace(/<title>[\s\S]*?<\/title>/i, '<title>' + safe + '<\/title>');
@@ -4698,30 +5080,62 @@ function buildDistributableHtml(opts) {
 // The published Team Report: read-only, all analysis, Set up hidden, Data
 // Editor reduced to a read-only "Film Clips" browser. Stamped with the publish
 // time and given its own tab title.
+// Promise of the HTML.
 function teamReportHtml() {
-  return buildDistributableHtml({
+  return publishedReport().then(report => buildDistributableHtml({
     viewer: true,
     publishedAt: new Date().toISOString(),
     title: REPORT.teamName + ' — Team Report',
+    report,
+  }));
+}
+// The report as published: passes and blocks marked "Ignore this event" are
+// left out of every stat -- rebuilt from the season's Statto export without
+// them, so completion rates, the leaderboard, lines and so on all recount.
+// "Edit" corrections (thrower, receiver, who got the D) are applied the same way.
+function publishedReport() {
+  const ann = loadAnnotations();
+  const ignored = StattoStats.ignoredEventIds(ann);
+  const edits = StattoStats.eventEdits(ann);
+  if ((!ignored.size && !edits) || !SITE) return Promise.resolve(REPORT);
+  return fetch(SITE_BASE + '/api/statto', { cache: 'no-store' })
+    .then(r => { if (!r.ok) throw new Error('Couldn’t load the Statto export (' + r.status + ').'); return r.arrayBuffer(); })
+    .then(buf => StattoStats.reportFromStatto(buf, { ignored, edits }))
+    .then(x => x.report);
+}
+// An annotation store without the records marked "Ignore this event".
+function withoutIgnoredTags(ann) {
+  const out = {};
+  Object.keys(ann || {}).forEach(k => {
+    const store = ann[k];
+    if (!store || typeof store !== 'object' || Array.isArray(store) || !['passes', 'blocks', 'points'].includes(k)) { out[k] = store; return; }
+    out[k] = {};
+    Object.keys(store).forEach(key => { if (!(store[key] && store[key].ignored)) out[k][key] = store[key]; });
   });
+  return out;
 }
 function publishForTeam() {
   if (SITE) { sitePublishReport(); return; }
-  downloadFile(teamReportHtml(), slug(REPORT.teamName) + '_team_report.html', 'text/html;charset=utf-8;');
+  teamReportHtml().then(html => downloadFile(html, slug(REPORT.teamName) + '_team_report.html', 'text/html;charset=utf-8;'));
 }
 // Preview opens the same read-only Team Report in a new tab, interactive, so the
 // editor can check it before publishing. (Blob URL inherits this page's origin,
 // so it shares localStorage -- fine, it's the same data, and the viewer never
 // writes anything.)
 function previewTeamReport() {
-  try {
-    const url = URL.createObjectURL(new Blob([teamReportHtml()], { type: 'text/html' }));
-    const win = window.open(url, '_blank');
-    if (!win) { alert('Your browser blocked the preview tab — allow pop-ups for this page, or use Publish and open the file.'); }
+  // Open the tab now (a click may open one; a later promise may not), then
+  // point it at the report once it's built.
+  const win = window.open('', '_blank');
+  if (!win) { alert('Your browser blocked the preview tab — allow pop-ups for this page, or use Publish and open the file.'); return; }
+  try { win.document.write('<p style="font-family:sans-serif;padding:24px">Building the Team Report…</p>'); } catch (e) {}
+  teamReportHtml().then(html => {
+    const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
+    win.location.href = url;
     setTimeout(() => URL.revokeObjectURL(url), 60000);
-  } catch (e) {
-    alert('Couldn’t open a preview here — use Publish Team Report instead.');
-  }
+  }).catch(err => {
+    win.close();
+    alert('Couldn’t open a preview here (' + err.message + ') — use Publish Team Report instead.');
+  });
 }
 
 // ---------- Season setup: saving to the site ----------
@@ -5057,8 +5471,8 @@ function syncShowStatus() {
 // Publishing on a team site: the Team Report goes to the server, and the team
 // opens it at <team address>/view.
 function sitePublishReport() {
-  const html = teamReportHtml();
-  fetch(SITE_BASE + '/api/report', { method: 'PUT', headers: { 'Content-Type': 'text/plain; charset=utf-8' }, body: html })
+  teamReportHtml()
+    .then(html => fetch(SITE_BASE + '/api/report', { method: 'PUT', headers: { 'Content-Type': 'text/plain; charset=utf-8' }, body: html }))
     .then(r => r.json().catch(() => ({})).then(j => { if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status)); return j; }))
     .then(() => {
       const link = location.origin + SITE_BASE + '/view';
@@ -6223,6 +6637,24 @@ function buildLineAnalysisSection(variant) {
       contentArea.appendChild(el('h2', { class: 'section-title' }, [document.createTextNode('Scoring Efficiency')]));
       contentArea.appendChild(buildLineScoringEfficiencyComparison(entities));
 
+      // Defence by scheme, from the video tagging.
+      const defense = selectedLines.map(l => ({ name: displayName(l), d: defenseBySchemeFor(resolveLinePoints(l.pointKeys, selectedGames)) }));
+      const schemes = [...new Set(defense.flatMap(x => [...x.d.byScheme.keys()]))]
+        .sort((a, b) => defSchemesInUse().indexOf(a) - defSchemesInUse().indexOf(b));
+      if (schemes.length) {
+        contentArea.appendChild(el('h2', { class: 'section-title' }, [document.createTextNode('Defence by scheme')]));
+        contentArea.appendChild(el('p', { class: 'pitch-caption' }, [document.createTextNode(
+          'From the video tagging: for each defence a line played, how often the opponent’s possession ended in a turnover rather than a goal (“stopped”). Only possessions tagged with a scheme count.'
+        )]));
+        const rows = [{ label: 'Possessions tagged', main: x => fmtPct(filmPct(x.d.tagged, x.d.possessions)), sub: x => `${x.d.tagged}/${x.d.possessions}` }]
+          .concat(schemes.map(sc => ({
+            label: sc + ': stopped',
+            main: x => { const t = x.d.byScheme.get(sc); return fmtPct(t ? filmPct(t.stops, t.n) : null); },
+            sub: x => { const t = x.d.byScheme.get(sc); return t ? `${t.stops}/${t.n}` : '0/0'; },
+          })));
+        contentArea.appendChild(buildComparisonTable(rows, defense, 'name', { mobileCards: true }));
+      }
+
       contentArea.appendChild(el('h2', { class: 'section-title' }, [document.createTextNode('Field Diagrams')]));
       let fieldCategories = new Set(['all']);
       const renderers = [];
@@ -6877,6 +7309,14 @@ function buildThrowerReceiverSection() {
     // to the field diagrams they describe.
     compareWrap.appendChild(buildStatsTable(chosen, PAIR_COLUMNS, 'n', `${slug(REPORT.teamName)}_compared_pairs.csv`));
     compareWrap.appendChild(buildPairComparisonSection(chosen, selectedGames));
+    // From the film: each pair's completion by throw type (tagged throws only).
+    const events = filmEvents(selectedGames);
+    const film = chosen.map(p => ({ pair: p.pair, film: filmThrowProfile(events, x => x.thrower === p.thrower && x.receiver === p.receiver) }));
+    if (film.some(x => x.film.tagged)) {
+      compareWrap.appendChild(el('h2', { class: 'section-title' }, [document.createTextNode('From the film')]));
+      compareWrap.appendChild(el('p', { class: 'pitch-caption' }, [document.createTextNode('From the video tagging: how each connection completes by throw type (tagged throws only), and why its turnovers happened.')]));
+      compareWrap.appendChild(buildComparisonTable(filmProfileRows(x => x.film), film, 'pair'));
+    }
   }
 
   controlsRow.appendChild(buildGameFilterDropdown((indices) => { selectedGames = indices; renderTop(); }, { initialSelected: selectedGames }));
@@ -7053,9 +7493,9 @@ const RAW_DATA_NOTES = [
   'Statto only records this team’s own actions -- a point the opponent won by simply holding their own possession has zero recorded passes for that point, so point and score counts should always come from the points data, never by counting passes.',
   'Player names (not IDs) are the join key across points, passes, blocks, lineup, and boxScore within this export.',
   'roster (top level) lists every player who appears in a box score this season. Each entry carries their mixed-line gender designation -- gender is "WMP" (women-matching player) or "MMP" (men-matching player), with genderCode 1 or 0 respectively (both null if the player has no gender set) -- plus hasPhoto and photoFile, and handedness ("Right" or "Left" -- the hand they throw with, as set by the admin; null if not set). Photos are NOT embedded here — they travel as a separate "player photos" ZIP downloaded from the same Raw Data tab, in which each file is named exactly as photoFile says (e.g. photos/sean_mcsweeney.png). If you were given that ZIP alongside this file, use photoFile to match a face to a name; if you weren’t, ignore it — nothing else depends on it.',
-  'pullEvents (top level, separate from games) is a manually video-tagged list, one entry per defensive point that has been tagged: who pulled and where our pull landed. puller is the player name (or null if untagged). landX/landY are 0-1 field fractions in the same coordinate system as passes (null when outOfBounds is true, or when a spot wasn’t marked); outOfBounds=true means the pull sailed out. It is only present for points a tagger has marked, so it may be empty or cover only some defensive points.',
+  'pullEvents (top level, separate from games) is a manually video-tagged list, one entry per defensive point that has been tagged: who pulled and where our pull landed. puller is the player name (or null if untagged). landX/landY are 0-1 field fractions in the same coordinate system as passes (null when outOfBounds is true, or when a spot wasn’t marked); outOfBounds=true means the pull went out of bounds; then tapInX/tapInY is where the disc was brought into play (tapInX is always 0.5, the middle of the field’s width; null if not marked). It is only present for points a tagger has marked, so it may be empty or cover only some defensive points.',
   'opponentTurnoverEvents (top level) is the other manually video-tagged list: opponent turnovers that were NOT one of our blocks (those are in games[].points[].blocks). Statto records nothing for them, so each is inferred as an opponent possession we won the disc back from, identified by pointNumber + opponentPossession (their n-th offensive possession that point); type is one of Huck turnover / Throwing error / Receiver error, or null if untagged. Like pullEvents, only tagged ones appear.',
-  'Film tags: a pass or block in games[].points[] may carry a "filmTags" object when someone has video-tagged it. On a pass: hand (backhand/forehand/etc.), release, distance, stall (Low/Mid/High), catch, highlight, turnoverReason (an ARRAY -- a turnover can have several causes), plus timestamp (seconds into that game’s video) and notes. On a block: type, highlight, timestamp, notes. A point may also carry filmTags: defScheme (the defence called), pull (where our pull landed -- puller, landX/landY 0-1 or outOfBounds), defensivePossessions[] (each with defScheme), and opponentTurnovers[] (each with a type). Every field is optional and tags exist only where a tagger added them, so most passes have none. (pullEvents/opponentTurnoverEvents above are flattened, game-context copies of the same point-level tags, handy for "list every tagged pull".)',
+  'Film tags: a pass or block in games[].points[] may carry a "filmTags" object when someone has video-tagged it. On a pass: hand (backhand/forehand/etc.), release, distance, stall (Low/Mid/High), catch, highlight, turnoverReason (an ARRAY -- a turnover can have several causes), outOfTimeout (true when it was the first throw after a timeout we called), plus timestamp (seconds into that game’s video) and notes. On a block: type, highlight, timestamp, notes. A point may also carry filmTags: defScheme (the defence called), pull (where our pull landed -- puller, landX/landY 0-1, or outOfBounds with tapInX/tapInY where it was tapped in), defensivePossessions[] (each with defScheme, and oppTimeout true if the opponent called a timeout during it), and opponentTurnovers[] (each with a type). Every field is optional and tags exist only where a tagger added them, so most passes have none. (pullEvents/opponentTurnoverEvents above are flattened, game-context copies of the same point-level tags, handy for "list every tagged pull".)',
   'videoLinks (top level) maps each selected game to its YouTube URL. To deep-link a tagged moment, append the tag’s timestamp: `<url>&t=<timestamp>s`.',
   'lines (top level) is the user’s curated line groupings (e.g. "O line", "D line"): each has a name, optional tournament, pointCount, the points it covers (gameIndex + pointNumber), and a roster listing how many of the line’s points each player was on (pctOfLinePoints). Lines are a season-level curation and are deliberately NOT filtered by the selected games.',
   'tournaments (top level) groups the selected games the way the report does -- custom names if the user set them, else auto-detected -- so questions can be scoped to an event ("at Regionals...").',
@@ -7168,6 +7608,8 @@ function collectPullEvents(gameIndices) {
         outOfBounds: !!rec.outOfBounds,
         landX: (!rec.outOfBounds && rec.landX != null) ? rec.landX : null,
         landY: (!rec.outOfBounds && rec.landY != null) ? rec.landY : null,
+        tapInX: (rec.outOfBounds && rec.tapInY != null) ? PULL_TAP_IN_X : null,
+        tapInY: (rec.outOfBounds && rec.tapInY != null) ? rec.tapInY : null,
         notes: rec.notes || null,
         videoTimestampSec: (rec.timestamp != null ? rec.timestamp : null),
       });
@@ -7775,10 +8217,11 @@ function buildRawDataSection() {
 function buildPointEvents(pt) { return StattoStats.pointEvents(pt); }
 
 // The stored annotation record for an event, whichever store it lives in.
+// An event marked "Ignore this event" has no record here, so film rows and
+// queries leave it out.
 function annotationRecordFor(ann, ev) {
-  if (ev.kind === 'pass') return ann.passes[ev.uuid];
-  if (ev.kind === 'block') return ann.blocks[ev.uuid];
-  return (ann.points || {})[ev.uuid];  // pull / def / oppTurn
+  const rec = ev.kind === 'pass' ? ann.passes[ev.uuid] : ev.kind === 'block' ? ann.blocks[ev.uuid] : (ann.points || {})[ev.uuid];  // pull / def / oppTurn
+  return rec && rec.ignored ? undefined : rec;
 }
 
 // ---------- Film tags on a game's point diagram ----------
@@ -7790,11 +8233,19 @@ function filmTagValues(rec, keys) {
   keys.forEach(k => {
     const v = rec[k];
     if (Array.isArray(v)) { if (v.length) out.push(v.join(' + ')); }
+    else if (v === true) out.push(TAG_FLAG_LABELS[k] || k);
     else if (v) out.push(v);
   });
   return out;
 }
-const FILM_PASS_TAG_KEYS = ['hand', 'release', 'distance', 'stall', 'catch', 'highlight', 'turnoverReason'];
+// Yes/no tags, stored as true when set; shown by their label.
+const TAG_FLAG_LABELS = { outOfTimeout: 'Out of timeout', oppTimeout: 'Opponent called timeout' };
+// The tagging panel's timeout button, per kind of event.
+const TIMEOUT_FLAGS = {
+  pass: { key: 'outOfTimeout', note: 'The first throw after a timeout we called.' },
+  def: { key: 'oppTimeout', note: 'They called a timeout during this possession.' },
+};
+const FILM_PASS_TAG_KEYS = ['hand', 'release', 'distance', 'stall', 'catch', 'highlight', 'turnoverReason', 'outOfTimeout'];
 
 // How one tagged event reads in the film strip: a short kind label, who/what it
 // was, and its tag values. Kept in one place so the strip and the diagram
@@ -7812,7 +8263,7 @@ function filmEventDescriptor(ev, rec) {
     return { kind: 'Pull', main: rec.puller || 'Pull', tags: landing ? [landing] : [] };
   }
   if (ev.kind === 'def') {
-    return { kind: 'Defence', main: `Their possession ${ev.defN}`, tags: filmTagValues(rec, ['defScheme']) };
+    return { kind: 'Defence', main: `Their possession ${ev.defN}`, tags: filmTagValues(rec, ['defScheme', 'oppTimeout']) };
   }
   return { kind: 'Opp TO', main: `Their possession ${ev.defN}`, tags: filmTagValues(rec, ['oppTurnover']) };
 }
@@ -7845,10 +8296,10 @@ function allPlayerNames() {
 // The event kinds the Query pane can list, with the filter dropdowns each one
 // offers and the noun used in its "N of M ..." summary line.
 const QUERY_KINDS = {
-  pass: { label: 'Passes', word: 'passes', filterKeys: ['hand', 'release', 'distance', 'stall', 'catch', 'highlight', 'turnoverReason'] },
+  pass: { label: 'Passes', word: 'passes', filterKeys: ['hand', 'release', 'distance', 'stall', 'catch', 'highlight', 'turnoverReason', 'outOfTimeout'] },
   block: { label: 'Blocks', word: 'blocks', filterKeys: ['type', 'highlight'] },
   pull: { label: 'Pulls', word: 'pulls', filterKeys: ['landing', 'puller'] },
-  def: { label: 'D-possessions', word: 'defensive possessions', filterKeys: ['defScheme'] },
+  def: { label: 'D-possessions', word: 'defensive possessions', filterKeys: ['defScheme', 'oppTimeout'] },
   oppTurn: { label: 'Opp turnovers', word: 'opponent turnovers', filterKeys: ['oppTurnover'] },
   // Points is a synthesized kind: rather than filtering tagged events, it lists
   // the start timestamp of each offensive/defensive possession in points the
@@ -7942,6 +8393,7 @@ function buildAnnotationQueryPane() {
       filterRow.appendChild(dropdown('Catch', ANNOTATION_VOCAB.catch, 'catch'));
       filterRow.appendChild(dropdown('Highlight', ANNOTATION_VOCAB.highlight, 'highlight'));
       filterRow.appendChild(dropdown('Turnover reason', ANNOTATION_VOCAB.turnoverReason, 'turnoverReason'));
+      filterRow.appendChild(dropdown('Out of timeout', ['Yes', 'No'], 'outOfTimeout'));
     } else if (showKind === 'block') {
       filterRow.appendChild(dropdown('Player', allPlayerNames(), 'player'));
       filterRow.appendChild(dropdown('Block type', BLOCK_VOCAB.type, 'type'));
@@ -7951,6 +8403,7 @@ function buildAnnotationQueryPane() {
       filterRow.appendChild(dropdown('Puller', allPlayerNames(), 'puller'));
     } else if (showKind === 'def') {
       filterRow.appendChild(dropdown('Defensive scheme', defSchemesInUse(), 'defScheme'));
+      filterRow.appendChild(dropdown('Opponent called timeout', ['Yes', 'No'], 'oppTimeout'));
     } else if (showKind === 'oppTurn') {
       filterRow.appendChild(dropdown('Turnover type', POINT_VOCAB.oppTurnover, 'oppTurnover'));
     } else if (showKind === 'points') {
@@ -8082,6 +8535,8 @@ function buildAnnotationQueryPane() {
       if (k === 'landing') {
         return filters[k] === 'Out-of-bounds' ? !!a.outOfBounds : (!a.outOfBounds && a.landX != null);
       }
+      // A yes/no tag: set (true) or not.
+      if (k in TAG_FLAG_LABELS) return !!a[k] === (filters[k] === 'Yes');
       // turnoverReason can hold several values at once -- match if the
       // selected reason is one of them (also accepts an older single-string
       // tag from before multi-select).
@@ -8096,9 +8551,10 @@ function buildAnnotationQueryPane() {
     // Every stored tag value worth showing, minus the ones already spelled out
     // in the row's own label. (Empty for Points rows, which carry no tags.)
     const tags = [];
-    ['hand', 'release', 'distance', 'stall', 'catch', 'highlight', 'turnoverReason', 'type', 'defScheme', 'oppTurnover'].forEach(k => {
+    ['hand', 'release', 'distance', 'stall', 'catch', 'highlight', 'turnoverReason', 'outOfTimeout', 'type', 'defScheme', 'oppTimeout', 'oppTurnover'].forEach(k => {
       const v = r.a[k];
       if (Array.isArray(v)) { if (v.length) tags.push(v.join(' + ')); }
+      else if (v === true) tags.push(TAG_FLAG_LABELS[k] || k);
       else if (v) tags.push(v);
     });
     if (r.a.notes) tags.push('“' + r.a.notes + '”');
@@ -8375,15 +8831,24 @@ function buildDataEditorSection(viewer, tagOnlyGame) {
     const clamp = (v) => Math.max(0, Math.min(1, v));
     return { x: Math.round(clamp(loc.x / PITCH_W) * 1000) / 1000, y: Math.round(clamp(loc.y / PITCH_H) * 1000) / 1000 };
   }
-  // On a Pull step, clicking the field marks where the pull landed.
+  // On a Pull step, clicking the field marks where the pull landed -- or, for
+  // a pull tagged out-of-bounds, where the disc was tapped in. An
+  // out-of-bounds pull is always brought to the middle of the field, so that
+  // spot snaps to the middle of the field's width, at the clicked distance
+  // up the field.
   svg.addEventListener('click', (evt) => {
     const step = steps[stepIdx];
     if (!step || step.kind !== 'pull') return;
     const frac = pitchClickFrac(evt);
     if (!frac) return;
-    setPointField(step.uuid, 'landX', frac.x);
-    setPointField(step.uuid, 'landY', frac.y);
-    setPointField(step.uuid, 'outOfBounds', undefined);
+    const rec = (annotations.points || {})[step.uuid] || {};
+    if (rec.outOfBounds) {
+      setPointField(step.uuid, 'tapInX', PULL_TAP_IN_X);
+      setPointField(step.uuid, 'tapInY', frac.y);
+    } else {
+      setPointField(step.uuid, 'landX', frac.x);
+      setPointField(step.uuid, 'landY', frac.y);
+    }
     render();
   });
   // Draws the recorded pull-landing spot on top of the (dimmed) point routes.
@@ -8393,6 +8858,17 @@ function buildDataEditorSection(viewer, tagOnlyGame) {
     const c = svgEl('circle', { cx, cy, r: 4, fill: '#4FD1AE', stroke: '#0E2426', 'stroke-width': 1.2 });
     const title = svgEl('title', {});
     title.textContent = 'Pull landing';
+    c.appendChild(title);
+    routeLayer.appendChild(c);
+  }
+  // Where an out-of-bounds pull was tapped in: a dashed ring, so it never
+  // reads as a landing spot.
+  function drawTapInMarker(fx, fy) {
+    const cx = fx * PITCH_W, cy = fy * PITCH_H;
+    routeLayer.appendChild(svgEl('circle', { cx, cy, r: 9, fill: 'none', stroke: '#E3B341', 'stroke-width': 2, 'stroke-dasharray': '4 3' }));
+    const c = svgEl('circle', { cx, cy, r: 4, fill: '#E3B341', stroke: '#0E2426', 'stroke-width': 1.2 });
+    const title = svgEl('title', {});
+    title.textContent = 'Out-of-bounds pull: tapped in here';
     c.appendChild(title);
     routeLayer.appendChild(c);
   }
@@ -8575,13 +9051,134 @@ function buildDataEditorSection(viewer, tagOnlyGame) {
     ]));
   }
 
+  // ---- "Ignore this event": for passes Statto needed only to make a point
+  // add up, or that are plain wrong. An ignored event is left out of every
+  // stat, count, export and the Team Report (once published again); its tags
+  // are kept in case someone changes their mind. Stored as ignored: true on
+  // the event's tag. Not on the Team Report's read-only Film Clips.
+  function stepIgnored(step) { const rec = stepRecord(step); return !!(rec && rec.ignored); }
+  function setStepIgnored(step, on) {
+    if (step.kind === 'pass' || step.kind === 'block') setField('ignored', on ? true : undefined);
+    else setPointField(step.uuid, 'ignored', on ? true : undefined);
+    render();
+  }
+  function stepTitle(step) {
+    if (step.kind === 'pass') return `${effectiveName(step, 'thrower') || '?'} → ${effectiveName(step, 'receiver') || '?'}`;
+    if (step.kind === 'block') return `${effectiveName(step, 'player') || '?'} — block`;
+    if (step.kind === 'pull') return 'Pull';
+    if (step.kind === 'def') return 'Defensive possession ' + step.defN;
+    return 'Opponent turnover';
+  }
+  // What else leaves the stats with this event.
+  function ignoreConsequence(step) {
+    if (step.kind === 'pass' && step.item.assist) return 'This pass is the assist: ignoring it also takes the assist and the goal out of the stats.';
+    if (step.kind === 'pass' && step.item.turnover) return 'This pass is a turnover: ignoring it also takes that turnover out of the stats.';
+    if (step.kind === 'block') return 'Ignoring a block takes it out of the blocks stats.';
+    return '';
+  }
   function renderPanel() {
+    const step = steps[stepIdx];
+    if (step && !viewer && stepIgnored(step)) {
+      panel.innerHTML = '';
+      panel.appendChild(el('div', { class: 'de-panel-head' }, [
+        el('div', { class: 'de-panel-title' }, [document.createTextNode(stepTitle(step))]),
+        el('div', { class: 'de-panel-sub' }, [document.createTextNode(`Point ${step.pt.number} · Ignored`)]),
+      ]));
+      panel.appendChild(el('p', { class: 'de-ignored-note' }, [document.createTextNode('Ignored: left out of every stat, count and export, and out of the Team Report once it’s published again. Its tags are kept in case you change your mind.')]));
+      const undo = el('button', { class: 'pill-btn', type: 'button' }, [document.createTextNode('Stop ignoring this event')]);
+      undo.addEventListener('click', () => setStepIgnored(step, false));
+      panel.appendChild(el('div', { class: 'controls-row de-ignore-row' }, [undo]));
+      return;
+    }
+    renderPanelBody();
+    // Yes/no timeout tags: on a pass, "Out of timeout" (the first throw after
+    // a timeout we called); on a defensive possession, "Opponent called
+    // timeout" (they called one during it).
+    const flag = step && !viewer && TIMEOUT_FLAGS[step.kind];
+    if (flag) {
+      const on = !!(stepRecord(step) || {})[flag.key];
+      const tbtn = el('button', { class: 'pill-btn de-flag-btn' + (on ? ' active' : ''), type: 'button', 'aria-pressed': on ? 'true' : 'false',
+        title: on ? 'Click again to clear' : flag.note }, [document.createTextNode((on ? '✓ ' : '') + TAG_FLAG_LABELS[flag.key])]);
+      tbtn.addEventListener('click', () => {
+        if (step.kind === 'pass') setField(flag.key, on ? undefined : true);
+        else setPointField(step.uuid, flag.key, on ? undefined : true);
+        render();
+      });
+      panel.appendChild(el('div', { class: 'controls-row de-flag-row' }, [tbtn,
+        el('span', { class: 'de-field-note' }, [document.createTextNode(flag.note)])]));
+    }
+    if (step && !viewer) {
+      const btn = el('button', { class: 'pill-btn de-ignore-btn', type: 'button', title: 'Leave this event out of every stat — e.g. a pass Statto needed only to make the point add up' }, [document.createTextNode('Ignore this event')]);
+      btn.addEventListener('click', () => setStepIgnored(step, true));
+      const why = ignoreConsequence(step);
+      panel.appendChild(el('div', { class: 'controls-row de-ignore-row' }, [btn].concat(why ? [el('span', { class: 'de-field-note' }, [document.createTextNode(why)])] : [])));
+    }
+    if (step && !viewer && (step.kind === 'pass' || step.kind === 'block')) panel.appendChild(buildEditSection(step));
+  }
+
+  // ---- "Edit": correct who threw, caught, or got the D, when Statto has it
+  // wrong. Stored as edit: { thrower, receiver } / { player } (names) on the
+  // event's tag; the published Team Report is rebuilt with it, so every stat
+  // credits the right player. (Who pulled isn't in Statto at all: that's the
+  // pull's own Puller field.)
+  const EDIT_FIELDS = { pass: [['thrower', 'Thrower'], ['receiver', 'Receiver']], block: [['player', 'Got the D']] };
+  let editOpenFor = null;  // the step whose editor is open
+  function effectiveName(step, field) {
+    const e = (stepRecord(step) || {}).edit;
+    return (e && e[field]) || step.item[field] || null;
+  }
+  function editedNote(step) {
+    const e = (stepRecord(step) || {}).edit || {};
+    const changed = (EDIT_FIELDS[step.kind] || []).filter(([f]) => e[f] && e[f] !== step.item[f]);
+    return changed.map(([f, label]) => label + ' was ' + (step.item[f] || 'unknown') + ' in Statto').join('; ');
+  }
+  function setEdit(step, field, name) {
+    const rec = stepRecord(step) || {};
+    const e = Object.assign({}, rec.edit);
+    if (!name || name === step.item[field]) delete e[field]; else e[field] = name;
+    setField('edit', Object.keys(e).length ? e : undefined);
+    render();
+  }
+  function buildEditSection(step) {
+    const wrap = el('div', { class: 'de-edit' }, []);
+    const open = editOpenFor === step.uuid;
+    const note = editedNote(step);
+    const toggle = el('button', { class: 'pill-btn de-edit-btn', type: 'button', 'aria-expanded': open ? 'true' : 'false' },
+      [document.createTextNode(open ? 'Done editing' : 'Edit')]);
+    toggle.addEventListener('click', () => { editOpenFor = open ? null : step.uuid; render(); });
+    wrap.appendChild(el('div', { class: 'controls-row de-edit-row' }, [toggle,
+      el('span', { class: 'de-field-note' }, [document.createTextNode(note ? 'Edited: ' + note + '.' : (step.kind === 'pass' ? 'Change who threw or caught it.' : 'Change who got the D.'))])]));
+    if (!open) return wrap;
+    // That point's line first, then everyone else.
+    const line = (step.pt.lineup || []).map(x => x.player).filter(Boolean).sort();
+    const rest = allPlayerNames().filter(n => !line.includes(n));
+    EDIT_FIELDS[step.kind].forEach(([field, label]) => {
+      const sel = el('select', { class: 'de-select', 'aria-label': label }, []);
+      const group = (title, names) => { if (!names.length) return; const g = el('optgroup', { label: title }, []); names.forEach(n => g.appendChild(el('option', { value: n }, [document.createTextNode(n + (n === step.item[field] ? ' (in Statto)' : ''))]))); sel.appendChild(g); };
+      group('On the field this point', line);
+      group('Everyone else', rest);
+      const current = effectiveName(step, field);
+      if (current && !line.includes(current) && !rest.includes(current)) sel.appendChild(el('option', { value: current }, [document.createTextNode(current)]));
+      sel.value = current || '';
+      sel.addEventListener('change', () => setEdit(step, field, sel.value));
+      wrap.appendChild(el('label', { class: 'de-field de-field-wide' }, [el('span', { class: 'de-field-label' }, [document.createTextNode(label)]), sel]));
+    });
+    if (note) {
+      const reset = el('button', { class: 'pill-btn', type: 'button' }, [document.createTextNode('Back to what Statto has')]);
+      reset.addEventListener('click', () => { setField('edit', undefined); render(); });
+      wrap.appendChild(el('div', { class: 'controls-row' }, [reset]));
+    }
+    wrap.appendChild(el('p', { class: 'de-field-note' }, [document.createTextNode('Every stat uses the corrected player once the Team Report is published again.')]));
+    return wrap;
+  }
+  function renderPanelBody() {
     panel.innerHTML = '';
     const step = steps[stepIdx];
     if (!step) { panel.appendChild(el('p', { class: 'pitch-caption' }, [document.createTextNode('No passes recorded for this game.')])); return; }
 
-    // Pull (defensive point opener): where our pull landed. Click the field to
-    // set a spot, or pick "Out-of-bounds". Keyed to "<pointUUID>#pull".
+    // Pull (defensive point opener): where our pull landed (click the field),
+    // or out-of-bounds plus where it was tapped in (click the field; snaps to
+    // the middle). Keyed to "<pointUUID>#pull".
     if (step.kind === 'pull') {
       const annKey = step.uuid;
       const rec = (annotations.points || {})[annKey] || {};
@@ -8590,14 +9187,16 @@ function buildDataEditorSection(viewer, tagOnlyGame) {
         el('div', { class: 'de-panel-sub' }, [document.createTextNode(`Point ${step.pt.number} · Our pull (defensive point)`)]),
       ]));
       const status = rec.outOfBounds
-        ? 'Landed out-of-bounds.'
+        ? ((rec.tapInY != null)
+          ? `Out-of-bounds — tapped in at y ${rec.tapInY}, in the middle of the field.`
+          : 'Out-of-bounds — click the field where the disc was tapped in (it snaps to the middle).')
         : (rec.landX != null && rec.landY != null)
           ? `Landed at x ${rec.landX}, y ${rec.landY} on the field.`
           : 'Not set yet — click the field to mark where the pull landed.';
       panel.appendChild(el('p', { class: 'pitch-caption de-pull-status' }, [document.createTextNode(status)]));
       const sel = el('select', { class: 'de-select' }, [
         el('option', { value: '' }, [document.createTextNode('In-bounds (click the field)')]),
-        el('option', { value: 'oob' }, [document.createTextNode('Out-of-bounds')]),
+        el('option', { value: 'oob' }, [document.createTextNode('Out-of-bounds (click the field where disc tapped in)')]),
       ]);
       sel.value = rec.outOfBounds ? 'oob' : '';
       sel.addEventListener('change', () => {
@@ -8607,6 +9206,8 @@ function buildDataEditorSection(viewer, tagOnlyGame) {
           setPointField(annKey, 'landY', undefined);
         } else {
           setPointField(annKey, 'outOfBounds', undefined);
+          setPointField(annKey, 'tapInX', undefined);
+          setPointField(annKey, 'tapInY', undefined);
         }
         render();
       });
@@ -8671,8 +9272,8 @@ function buildDataEditorSection(viewer, tagOnlyGame) {
       const p = step.item;
       const outcome = p.assist ? 'Assist (goal)' : (p.throwerError && p.receiverError) ? 'Throwaway + drop' : p.throwerError ? 'Throwaway' : p.receiverError ? 'Drop' : 'Completed';
       panel.appendChild(el('div', { class: 'de-panel-head' }, [
-        el('div', { class: 'de-panel-title' }, [document.createTextNode(`${p.thrower || 'Unknown'} → ${p.receiver || 'Unknown'}`)]),
-        el('div', { class: 'de-panel-sub' }, [document.createTextNode(`Point ${step.pt.number} · ${outcome}`)]),
+        el('div', { class: 'de-panel-title' }, [document.createTextNode(`${effectiveName(step, 'thrower') || 'Unknown'} → ${effectiveName(step, 'receiver') || 'Unknown'}`)]),
+        el('div', { class: 'de-panel-sub' }, [document.createTextNode(`Point ${step.pt.number} · ${outcome}` + (editedNote(step) ? ' · Edited' : ''))]),
       ]));
       panel.appendChild(annChipField('Hand', ANNOTATION_VOCAB.hand, 'hand', rec));
       panel.appendChild(annChipField('Release', ANNOTATION_VOCAB.release, 'release', rec));
@@ -8687,8 +9288,8 @@ function buildDataEditorSection(viewer, tagOnlyGame) {
     } else {
       const b = step.item;
       panel.appendChild(el('div', { class: 'de-panel-head' }, [
-        el('div', { class: 'de-panel-title' }, [document.createTextNode(`${b.player || 'Unknown'} — block`)]),
-        el('div', { class: 'de-panel-sub' }, [document.createTextNode(`Point ${step.pt.number} · Defensive block`)]),
+        el('div', { class: 'de-panel-title' }, [document.createTextNode(`${effectiveName(step, 'player') || 'Unknown'} — block`)]),
+        el('div', { class: 'de-panel-sub' }, [document.createTextNode(`Point ${step.pt.number} · Defensive block` + (editedNote(step) ? ' · Edited' : ''))]),
       ]));
       const grid = el('div', { class: 'de-field-grid' }, []);
       grid.appendChild(annField('Block type', BLOCK_VOCAB.type, 'type', rec));
@@ -8710,10 +9311,16 @@ function buildDataEditorSection(viewer, tagOnlyGame) {
   const taggedCount = el('span', { class: 'de-tagged-count' }, []);
   // Counts the events currently in view, so it re-scopes with the events
   // filter -- "12 of 40" while skipping throws, not 12 of every pass in the game.
+  // Ignored events count as neither tagged nor not (StattoStats.taggedEvents).
   function updateTaggedCount() {
-    let n = 0;
-    steps.forEach(st => { const rec = stepRecord(st); if (rec && Object.keys(rec).length) n++; });
-    taggedCount.textContent = `${n} of ${steps.length} events tagged in this view`;
+    let n = 0, total = 0, ignored = 0;
+    steps.forEach(st => {
+      const rec = stepRecord(st);
+      if (rec && rec.ignored) { ignored++; return; }
+      total++;
+      if (rec && Object.keys(rec).length) n++;
+    });
+    taggedCount.textContent = `${n} of ${total} events tagged in this view` + (ignored ? ` (${ignored} ignored)` : '');
   }
 
   function render() {
@@ -8723,6 +9330,7 @@ function buildDataEditorSection(viewer, tagOnlyGame) {
       if (step.kind === 'pull') {
         const rec = (annotations.points || {})[step.uuid] || {};
         if (!rec.outOfBounds && rec.landX != null && rec.landY != null) drawPullMarker(rec.landX, rec.landY);
+        if (rec.outOfBounds && rec.tapInX != null && rec.tapInY != null) drawTapInMarker(rec.tapInX, rec.tapInY);
       }
       svg.style.cursor = step.kind === 'pull' ? 'crosshair' : '';
       const kindLabel = step.kind === 'pass'
@@ -8992,9 +9600,11 @@ function playerFilmThrows(name, limit) {
     const vid = parseYouTubeId(links[gi]);
     if (!vid) return;
     (g.points || []).forEach(pt => (pt.passes || []).forEach(p => {
-      if (p.thrower !== name || !p.uuid) return;
+      if (!p.uuid) return;
       const rec = ann.passes[p.uuid];
-      if (!rec || rec.timestamp == null || !isFinite(Number(rec.timestamp))) return;
+      // Who threw it: an "Edit" correction wins over Statto.
+      if (((rec && rec.edit && rec.edit.thrower) || p.thrower) !== name) return;
+      if (!rec || rec.ignored || rec.timestamp == null || !isFinite(Number(rec.timestamp))) return;
       out.push({ game: g, vid, ts: Math.max(0, Math.floor(Number(rec.timestamp))), hand: rec.hand || null });
     }));
   });
@@ -9049,6 +9659,175 @@ function buildHandednessSection() {
   render();
   // Opening the tab picks up throws tagged (or video links added) since.
   gameViewRefreshers.set('handedness', render);
+  return section;
+}
+
+// ---------- Defense (Team Report): the defensive video tagging, together ----------
+// Schemes and how they did, the opponents' turnovers, blocks by player, and
+// our pullers -- for the games chosen.
+function filmTable(headers, rows, opts) {
+  opts = opts || {};
+  const table = el('table', { class: 'stats film-table' }, [
+    el('thead', {}, [el('tr', {}, headers.map((h, i) => el('th', i === 0 ? { class: 'row-label' } : {}, [document.createTextNode(h)])))]),
+    el('tbody', {}, rows.map(r => el('tr', r.cls ? { class: r.cls } : {}, r.cells.map((c, i) => el('td', i === 0 ? { class: 'row-label' } : {}, [c instanceof Node ? c : document.createTextNode(c == null ? '–' : String(c))]))))),
+  ]);
+  return el('div', { class: 'table-scroll' }, [table]);
+}
+function buildDefenseSection() {
+  const section = el('section', { class: 'view', id: 'defense' }, []);
+  section.appendChild(el('p', { class: 'eyebrow' }, [document.createTextNode('Defense')]));
+  section.appendChild(el('p', { class: 'hero-sub' }, [document.createTextNode('Our defence from the video tagging: which schemes worked, how the opponents gave the disc back, who got the blocks, and who pulled.')]));
+  const header = el('div', { class: 'section-title-row' }, [el('span', {}, [document.createTextNode('Games')])]);
+  const content = el('div', {}, []);
+  header.appendChild(buildGameFilterDropdown(render));
+  section.appendChild(header);
+  section.appendChild(content);
+
+  function render(indices) {
+    content.innerHTML = '';
+    const events = filmEvents(indices);
+    const games = indices.map(i => REPORT.games[i]);
+    const anyDefTag = events.some(e => e.rec && ['def', 'block', 'oppTurn', 'pull'].includes(e.ev.kind));
+    if (!anyDefTag) {
+      content.appendChild(el('p', { class: 'pitch-caption' }, [document.createTextNode('Nothing defensive is tagged in these games yet: defensive schemes, block types, opponent turnovers and pulls all show here once they are.')]));
+      return;
+    }
+    const h2 = t => content.appendChild(el('h2', { class: 'section-title' }, [document.createTextNode(t)]));
+    const cap = t => content.appendChild(el('p', { class: 'pitch-caption' }, [document.createTextNode(t)]));
+
+    // ---- schemes ----
+    const points = [];
+    indices.forEach(gi => (REPORT.games[gi].points || []).forEach(pt => points.push({ gameIndex: gi, point: pt })));
+    const d = defenseBySchemeFor(points);
+    if (d.tagged || d.oppTimeouts.n) {
+      h2('Schemes');
+      cap('Each opponent possession tagged with the defence we played: how many we stopped (it ended in a turnover) and how many they scored on.');
+      const order = defSchemesInUse();
+      const rows = [...d.byScheme.entries()].sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0])).map(([sc, t]) => ({
+        cells: [sc, t.n, t.stops, t.n - t.stops, fmtPct(filmPct(t.stops, t.n))] }));
+      rows.push({ cls: 'film-foot', cells: ['Not tagged', d.possessions - d.tagged, '', '', ''] });
+      if (d.oppTimeouts.n) rows.push({ cls: 'film-foot', cells: ['After they called a timeout', d.oppTimeouts.n, d.oppTimeouts.stops, d.oppTimeouts.n - d.oppTimeouts.stops, fmtPct(filmPct(d.oppTimeouts.stops, d.oppTimeouts.n))] });
+      content.appendChild(filmTable(['Scheme', 'Possessions', 'Stopped', 'They scored', 'Stop rate'], rows));
+    }
+
+    // ---- the opponents' turnovers ----
+    const blocks = events.filter(e => e.ev.kind === 'block');
+    const unforced = events.filter(e => e.ev.kind === 'oppTurn');
+    if (blocks.length || unforced.length) {
+      h2('How they gave it back');
+      cap(`${blocks.length + unforced.length} opponent turnovers: ${blocks.length} forced (our blocks) and ${unforced.length} unforced.`);
+      const pies = buildTurnoverTypeCharts(games, { only: 'theirs', theirLabel: 'Opponents’ turnovers' });
+      if (pies) content.appendChild(pies);
+    }
+
+    // ---- blocks by player ----
+    if (blocks.length) {
+      h2('Blocks by player');
+      const types = BLOCK_VOCAB.type.filter(t => blocks.some(e => e.rec && e.rec.type === t));
+      const byPlayer = new Map();
+      blocks.forEach(e => {
+        const who = e.ev.item.player || 'Unknown';
+        const row = byPlayer.get(who) || { total: 0, untagged: 0, types: new Map() };
+        row.total++;
+        if (e.rec && e.rec.type) row.types.set(e.rec.type, (row.types.get(e.rec.type) || 0) + 1); else row.untagged++;
+        byPlayer.set(who, row);
+      });
+      const rows = [...byPlayer.entries()].sort((a, b) => b[1].total - a[1].total).map(([who, r]) => ({
+        cells: [who].concat(types.map(t => r.types.get(t) || ''), [r.untagged || '', r.total]) }));
+      content.appendChild(filmTable(['Player'].concat(types, ['Not tagged', 'Total']), rows));
+    }
+
+    // ---- pulls ----
+    const pulls = events.filter(e => e.ev.kind === 'pull' && e.rec);
+    if (pulls.length) {
+      h2('Pullers');
+      cap('Tagged pulls by who pulled: how many went out of bounds, and how often we went on to break (score that point).');
+      const byPuller = new Map();
+      pulls.forEach(e => {
+        const who = e.rec.puller || 'Puller not tagged';
+        const r = byPuller.get(who) || { n: 0, oob: 0, breaks: 0 };
+        r.n++;
+        if (e.rec.outOfBounds) r.oob++;
+        if (e.pt.result === 1) r.breaks++;
+        byPuller.set(who, r);
+      });
+      const rows = [...byPuller.entries()].sort((a, b) => b[1].n - a[1].n).map(([who, r]) => ({
+        cells: [who, r.n, r.n - r.oob, r.oob, fmtPct(filmPct(r.oob, r.n)), r.breaks, fmtPct(filmPct(r.breaks, r.n))] }));
+      content.appendChild(filmTable(['Puller', 'Pulls', 'In bounds', 'Out of bounds', 'OB rate', 'Breaks', 'Break rate'], rows));
+    }
+  }
+  render(REPORT.games.map((g, i) => i));
+  return section;
+}
+
+// ---------- My clips (Team Report): one player's film ----------
+// Every tagged moment a player is in -- their throws, catches, blocks and
+// pulls -- each linked to that moment in the game's video.
+const MY_CLIP_ROLES = [
+  { key: 'all', label: 'All' },
+  { key: 'throw', label: 'Throws' },
+  { key: 'catch', label: 'Catches' },
+  { key: 'block', label: 'Blocks' },
+  { key: 'pull', label: 'Pulls' },
+];
+function playerClips(name, gameIndices) {
+  const out = [];
+  filmEvents(gameIndices).forEach(e => {
+    if (!e.rec || e.rec.timestamp == null) return;
+    const ev = e.ev, p = ev.item;
+    const tags = filmEventDescriptor(ev, e.rec).tags || [];
+    const base = { gi: e.gi, game: e.game, pt: e.pt, ts: e.rec.timestamp, tags };
+    if (ev.kind === 'pass' && p.thrower === name) out.push(Object.assign({ role: 'throw', what: `Throw to ${p.receiver || '?'} · ${passOutcomeWord(p)}` }, base));
+    if (ev.kind === 'pass' && p.receiver === name) out.push(Object.assign({ role: 'catch', what: `From ${p.thrower || '?'} · ${passOutcomeWord(p)}` }, base));
+    if (ev.kind === 'block' && p.player === name) out.push(Object.assign({ role: 'block', what: 'Block' }, base));
+    if (ev.kind === 'pull' && e.rec.puller === name) out.push(Object.assign({ role: 'pull', what: 'Pull' }, base));
+  });
+  return out;
+}
+function buildMyClipsSection() {
+  const section = el('section', { class: 'view', id: 'my-clips' }, []);
+  section.appendChild(el('p', { class: 'eyebrow' }, [document.createTextNode('My clips')]));
+  section.appendChild(el('p', { class: 'hero-sub' }, [document.createTextNode('Pick a player to see every tagged moment they’re in — throws, catches, blocks and pulls — each opening the game video right there.')]));
+  const names = allPlayerNames();
+  let player = names[0] || '';
+  let role = 'all';
+  let games = REPORT.games.map((g, i) => i);
+  const header = el('div', { class: 'section-title-row' }, [el('span', {}, [document.createTextNode('Player')])]);
+  const controls = el('div', { class: 'controls-row' }, []);
+  const playerSel = el('select', { class: 'de-select', 'aria-label': 'Player' }, names.map(n => el('option', { value: n }, [document.createTextNode(n)])));
+  playerSel.addEventListener('change', () => { player = playerSel.value; render(); });
+  controls.appendChild(playerSel);
+  controls.appendChild(buildSegToggle(MY_CLIP_ROLES, (k) => { role = k; render(); }, role));
+  controls.appendChild(buildGameFilterDropdown((idx) => { games = idx; render(); }));
+  header.appendChild(controls);
+  section.appendChild(header);
+  const content = el('div', {}, []);
+  section.appendChild(content);
+
+  function render() {
+    content.innerHTML = '';
+    const all = playerClips(player, games);
+    const clips = role === 'all' ? all : all.filter(c => c.role === role);
+    const counts = MY_CLIP_ROLES.slice(1).map(r => all.filter(c => c.role === r.key).length + ' ' + r.label.toLowerCase()).join(' · ');
+    content.appendChild(el('p', { class: 'pitch-caption' }, [document.createTextNode(all.length
+      ? `${all.length} tagged moments with a video timestamp: ${counts}.`
+      : 'No tagged moments with a video timestamp for ' + player + ' in these games yet.')]));
+    let lastGame = -1;
+    let list = null;
+    clips.forEach(c => {
+      if (c.gi !== lastGame) {
+        lastGame = c.gi;
+        content.appendChild(el('h3', { class: 'film-subtitle' }, [document.createTextNode(`vs ${c.game.opponent} · ${c.game.dateDisplay}`)]));
+        list = el('ul', { class: 'my-clips' }, []);
+        content.appendChild(list);
+      }
+      list.appendChild(el('li', {}, [
+        filmClipEl(c.gi, c.ts, `Pt ${c.pt.number} · ${c.what}`),
+        c.tags.length ? el('span', { class: 'my-clip-tags' }, [document.createTextNode(c.tags.join(' · '))]) : null,
+      ]));
+    });
+  }
+  render();
   return section;
 }
 
@@ -10337,6 +11116,8 @@ function init() {
   mountRebuildableView(() => buildLineAnalysisSection('analysis'));
   mountRebuildableView(buildThrowerReceiverSection);
   mountRebuildableView(buildFieldAnalysisSection);
+  mountRebuildableView(buildDefenseSection);
+  mountRebuildableView(buildMyClipsSection);
   mountRebuildableView(buildGenderAnalysisSection);
   mountRebuildableView(buildTimeSeriesSection);
   mountRebuildableView(buildAdvancedStatsSection);
