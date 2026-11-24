@@ -621,9 +621,13 @@ class BrowserTests(unittest.TestCase):
         self.assertEqual(tags[p0]["by"], "Alex")
         self.assertEqual(tags[p1]["by"], "Blake")
 
-        # The editor's own annotation editor gets them live too.
+        # Season setup gets them live too (for publishing); it has no tagging
+        # tab of its own -- the admin tags in the hub like everyone else.
         ed = self.sign_in(editor_ctx, "editor", EDITOR_PW, go="/editor")
         self.setup_rows(ed)
+        self.assertEqual(ed.eval_on_selector_all("#topnav button.tab", "b => b.map(x => x.textContent)"),
+                         ["Set up", "Line set up", "Handedness"])
+        self.assertIsNone(ed.query_selector("#data-editor"))
         blake.evaluate(tag, [2, "Hammer"])
         wait_until(lambda: len(ed.evaluate("() => Object.keys(loadAnnotations().passes)")) >= 3, message="editor sees new tags")
 
@@ -1250,6 +1254,15 @@ class BrowserTests(unittest.TestCase):
         self.assertIn("Person", text)
         self.assertIn("Pullers", text)
         self.assertIn(pick["thrower"], text)
+        # Every Defense table sorts by any column, both ways; "Not tagged" stays last.
+        schemes = "#defense .film-table >> nth=0"
+        head = schemes + " >> th >> nth=1"
+        view.click(head)
+        self.assertEqual(view.get_attribute(head, "aria-sort"), "descending")
+        view.click(head)
+        self.assertEqual(view.get_attribute(head, "aria-sort"), "ascending")
+        self.assertEqual(view.text_content(schemes + " >> tbody tr >> nth=-1 >> td >> nth=0"), "Not tagged")
+        self.assertEqual(view.eval_on_selector_all("#defense .film-table", "ts => ts.every(t => t.classList.contains('sortable'))"), True)
         view.evaluate("() => showView('my-clips')")
         view.wait_for_selector("#my-clips select")
         view.select_option("#my-clips select", pick["thrower"])
@@ -1258,6 +1271,19 @@ class BrowserTests(unittest.TestCase):
         self.assertIn("Throw to", clips)
         self.assertIn("Pull", clips)
         self.assertIn("Backhand", clips)
+        # A timestamped link plays in the page, started at its second (YouTube's
+        # own page would resume wherever you last stopped watching).
+        view.evaluate("""() => { const a = document.createElement('a');
+            a.href = 'https://www.youtube.com/watch?v=abcDEF12345&t=75s'; a.id = 'clip-test'; a.textContent = '▶ Pt 3 · Throw';
+            document.querySelector('#my-clips').appendChild(a); }""")
+        view.route("https://www.youtube.com/**", lambda route: route.fulfill(body="", content_type="text/html"))
+        view.click("#clip-test")
+        frame = view.wait_for_selector(".clip-player iframe")
+        self.assertIn("/embed/abcDEF12345?start=75&autoplay=1", frame.get_attribute("src"))
+        self.assertEqual(view.text_content(".clip-player .cropper-title"), "Pt 3 · Throw")
+        self.assertEqual(view.url.split("#")[0].endswith("/view"), True)
+        view.click(".clip-player button:has-text('Close')")
+        self.assertIsNone(view.query_selector(".clip-player"))
         ctx.close()
         self.assertEqual(self.errors, [])
 

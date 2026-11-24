@@ -1481,7 +1481,6 @@
   /* ---------- Data Editor ---------- */
   .de-game-row { align-items: center; gap: 10px; }
   .de-inline-label { font-size: 12px; font-weight: 700; color: var(--chalk-dim); text-transform: uppercase; letter-spacing: 0.06em; }
-  .de-game-select { min-width: 240px; }
   .de-game-fixed { font-weight: 700; color: var(--chalk); }
   .setup-tag-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .setup-tag-actions .pill-btn { margin-top: 0; padding: 5px 10px; }
@@ -1666,7 +1665,6 @@
   .de-ts-row .pill-btn:disabled { opacity: 0.4; cursor: not-allowed; }
   .de-io-row { align-items: center; gap: 10px; margin-top: 20px; }
   .de-tagged-count { font-size: 12px; color: var(--chalk-dim); }
-  .de-mode-row { margin: 4px 0 14px; }
 
   /* Data Editor -- Query pane */
   .de-query-top { display: flex; flex-wrap: wrap; gap: 18px; align-items: flex-end; margin-bottom: 14px; }
@@ -2031,3 +2029,10 @@ a.film-clip:hover { text-decoration: underline; }
 .my-clips li { display: flex; flex-wrap: wrap; gap: 2px 10px; align-items: baseline; padding: 7px 0; border-bottom: 1px solid rgba(var(--chalk-rgb),0.07); }
 .my-clips li .film-clip { white-space: normal; font-size: 13px; font-weight: 600; }
 .my-clip-tags { font-size: 12px; color: var(--chalk-dim); }
+
+/* ---------- Clip player (timestamped links play here) ---------- */
+.app-dialog.clip-player { max-width: min(960px, calc(100vw - 32px)); width: 960px; align-items: stretch; }
+.clip-player-wrap { position: relative; width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: 8px; overflow: hidden; }
+.clip-player-frame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+.clip-player-external { font-size: 12.5px; color: var(--chalk-dim); align-self: flex-start; }
+.app-dialog.clip-player .app-dialog-body { display: flex; flex-direction: column; gap: 8px; }

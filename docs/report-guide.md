@@ -2,8 +2,8 @@
 
 Each team's pages split into two:
 
-- **Season setup** (admin only) — **Set up**, the **Video annotation editor**,
-  **Line set up** and **Handedness**. This is where you author; none of the analysis lives
+- **Season setup** (admin only) — **Set up**, **Line set up** and
+  **Handedness**. This is where you author; none of the analysis lives
   here. Everything saves to the site as you go.
 - **Team Report** (what you publish from Season setup, at `<team address>/view`)
   — **Season**, a **Games** dropdown, **Film Clips**, **My clips**, **Player Analysis**,
@@ -12,6 +12,11 @@ Each team's pages split into two:
   Read-only and mobile-friendly.
 
 The sections below walk through each tab; the heading says which one it's in.
+
+**Clip links** (every ▶ timestamp) play the game video right in the page,
+starting at that moment. Ctrl/⌘-click one, or use **Open on YouTube** in the
+player, to watch on YouTube instead — but YouTube may resume where you last
+stopped watching that video rather than at the clip.
 For the taggers' tagging page, see [the tagging guide](tagging.md).
 
 ## Set up  ·  *Season setup*
@@ -65,8 +70,8 @@ The configuration the Team Report reads from. None of it is in the
   it on the site at `<team address>/view`, for whoever has the team's viewer
   password (or anyone with the link, if you turn that password off). The Team
   Report is where the data and analysis live: every analysis tab (Season,
-  Player, Line, Time Series, …), with no editing surfaces — no Set up, the Video
-  annotation editor becomes a read-only **Film Clips** browser, and Line
+  Player, Line, Time Series, …), with no editing surfaces — no Set up, the tagged
+  film becomes a read-only **Film Clips** browser, and Line
   Analysis shows the comparison without the curation controls. It's a
   **point-in-time snapshot** (stamped with its publish time in the footer), so
   publish again after you change anything.
@@ -79,12 +84,13 @@ The configuration the Team Report reads from. None of it is in the
   film simply skips those steps rather than pointing at nothing. Arrow keys step
   through it, Esc or **Skip** closes it.
 
-## Video annotation editor  ·  *Season setup*
+## Tagging a game  ·  *Tagging hub*
 
-Step through a game's events on its field diagram and tag them, building a
+Open a game from the **Tagging hub** (helpers and the admin alike) and step
+through its events on its field diagram and tag them, building a
 richer, queryable film dataset on top of the raw Statto data.
 
-- Pick a game, then move step-by-step with **← / →** (or Prev/Next) through
+- Move step-by-step with **← / →** (or Prev/Next) through
   every **pass**, **block**, **pull**, **defensive possession** and
   **opponent turnover**. The focused pass is highlighted on the field diagram
   while the rest of the point dims, so you always know exactly which one
@@ -142,11 +148,11 @@ richer, queryable film dataset on top of the raw Statto data.
   turnover. **Stop ignoring this event** brings it back. Publish again for the
   Team Report to catch up.
 - Tags save to the site event by event, so you see helpers' tags arrive as
-  they work (and they see yours). They ride along when you **Publish the Team Report**, and have their own **Export / Import annotations JSON** (e.g. to bring
-  in tags from an old helper's file). They key to Statto's stable pass IDs, so
+  they work (and they see yours). They ride along when you **Publish the Team Report**. To bring in tags from an
+  old helper's file, the admin uses **Upload tags** on that game's row in the hub. They key to Statto's stable pass IDs, so
   they survive adding newer exports as you log more games.
-- A **Tag / Query** toggle at the top switches between the stepping editor and
-  a **Query** view, which covers **all five event kinds** — Passes, Blocks,
+- To search the tags, use the Team Report's **Film Clips** tab (**Preview
+  Team Report** shows the latest tags before you publish). Its **Query** covers **all five event kinds** — Passes, Blocks,
   Pulls, D-possessions and Opp turnovers — each with its own filters (pass
   outcome and tag fields; block type; pull landing and puller; defensive
   scheme; opponent-turnover type). Results are a clip list where each entry
@@ -247,7 +253,7 @@ columns → Clutch Efficiency → Box score.**
     instead of getting compressed toward the bottom of the scale — see
     [Stat glossary](#stat-glossary) for the exact formula
 
-- **Film tags.** Once a game has been tagged in the Video annotation editor, the layout
+- **Film tags.** Once a game has been tagged, the layout
   gains a third column — point log, field diagram, **Tagged events** — and
   until then nothing changes, so an untagged game looks exactly as it always
   did:
@@ -478,7 +484,8 @@ filters:
 
 ## Defense  ·  *Team Report*
 
-The defensive video tagging in one place, with a **games filter**:
+The defensive video tagging in one place, with a **games filter**. Click any
+column heading to sort a table by it; click again to reverse the order.
 
 - **Schemes** — each opponent possession tagged with the defence we played:
   how many we stopped (it ended in a turnover), how many they scored on, and
