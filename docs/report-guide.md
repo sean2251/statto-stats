@@ -123,6 +123,10 @@ richer, queryable film dataset on top of the raw Statto data.
   embeds the YouTube player — scrub to the moment and click **Grab current
   time**, or **Jump** back to a saved time. No link, or prefer to type it?
   Enter a timestamp as `mm:ss` manually.
+- **Out of timeout**, on a pass, marks it as the first throw after a timeout
+  we called (click again to clear). It shows with the pass's tags, can be
+  filtered on in Query (Out of timeout: Yes / No), and is in the export as
+  `filmTags.outOfTimeout`.
 - **Ignore this event**, at the bottom of every event's tag panel, leaves an
   event out of everything: every stat (completion rates, the leaderboard,
   lines, …), tag counts, exports and the published Team Report. Use it for

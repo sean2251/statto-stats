@@ -1099,6 +1099,17 @@ class BrowserTests(unittest.TestCase):
         page.wait_for_selector("button:has-text('Ignore this event')")
         self.assertEqual(page.text_content(".de-tagged-count"), before)
         wait_until(lambda: not (server_rec() or {}).get("ignored"), message="un-ignore saved")
+
+        # "Out of timeout" (above the ignore button) tags the throw, and clears.
+        self.assertEqual(page.eval_on_selector_all(".de-flag-row ~ .de-ignore-row, .de-flag-row", "e => e.map(x => x.className)"),
+                         ["controls-row de-flag-row", "controls-row de-ignore-row"])
+        page.click("button:has-text('Out of timeout')")
+        page.wait_for_selector("button.de-flag-btn[aria-pressed=true]")
+        wait_until(lambda: (server_rec() or {}).get("outOfTimeout") is True, message="out of timeout saved")
+        self.assertIn("Out of timeout", page.evaluate("k => filmTagValues(loadAnnotations().passes[k], FILM_PASS_TAG_KEYS)", target["uuid"]))
+        page.click("button.de-flag-btn")
+        page.wait_for_selector("button.de-flag-btn[aria-pressed=false]")
+        wait_until(lambda: not (server_rec() or {}).get("outOfTimeout"), message="out of timeout cleared")
         ed.reload()
         self.setup_rows(ed)
         html, report = publish_and_read()

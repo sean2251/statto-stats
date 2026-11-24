@@ -1618,6 +1618,10 @@
   /* "Ignore this event", at the foot of every event's tag panel */
   .de-ignore-row { margin-top: 16px; padding-top: 12px; border-top: 1px solid rgba(var(--chalk-rgb),0.12); gap: 10px; align-items: center; }
   .de-ignore-row .pill-btn { margin-top: 0; }
+  .de-flag-row { margin-top: 14px; gap: 10px; align-items: center; }
+  .de-flag-row .pill-btn { margin-top: 0; }
+  .de-flag-row .de-field-note { margin: 0; flex: 1; min-width: 160px; }
+  .de-flag-btn.active { background: var(--chalk); color: var(--ink); border-color: var(--chalk); }
   .de-ignore-row .de-field-note { margin: 0; flex: 1; min-width: 160px; }
   .de-ignored-note { font-size: 13px; line-height: 1.5; color: var(--chalk); padding: 10px 12px; border-radius: 8px; border: 1px dashed rgba(var(--chalk-rgb),0.35); margin: 10px 0 0; }
   .de-select, .de-ts-input, .de-notes {
