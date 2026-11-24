@@ -1684,7 +1684,9 @@ function buildFieldAnalysisSection() {
       playerHost.innerHTML = ''; faPlayer = null; faPlayerVid = null;
       videoNote.innerHTML = '';
       videoNote.appendChild(document.createTextNode('The embedded player needs the report opened from a web address (http/https). '));
-      videoNote.appendChild(el('a', { href: 'https://www.youtube.com/watch?v=' + vid + (ts != null ? '&t=' + Math.floor(ts) + 's' : ''), target: '_blank', rel: 'noopener noreferrer' }, [document.createTextNode('Watch on YouTube ↗')]));
+      // The player beside it already starts at the clip; this one is explicitly
+      // "go to YouTube", so the clip player leaves it alone (yt-external).
+      videoNote.appendChild(el('a', { href: ts != null ? youtubeTimestampUrl(vid, ts) : 'https://www.youtube.com/watch?v=' + vid, target: '_blank', rel: 'noopener noreferrer', class: 'yt-external' }, [document.createTextNode('Watch on YouTube ↗')]));
       return;
     }
     videoNote.textContent = ts == null ? 'This throw has no video timestamp tagged.' : '';
@@ -5291,12 +5293,12 @@ function openDialog(title, bodyNodes, actions) {
 // player always honours its start time, so a plain click on any such link
 // plays it here instead; Ctrl/⌘/Shift-click or middle-click still opens
 // YouTube in a new tab, and the player links there too.
-const CLIP_URL_RE = /^https:\/\/www\.youtube\.com\/watch\?v=([A-Za-z0-9_-]+)&t=(\d+)s$/;
+const CLIP_URL_RE = /^https:\/\/(?:www\.)?youtube\.com\/watch\?v=([A-Za-z0-9_-]+)&t=(\d+)(?:\.\d+)?s$/;
 function openClipPlayer(vid, secs, title) {
   const src = `https://www.youtube.com/embed/${vid}?start=${secs}&autoplay=1&rel=0&playsinline=1`;
   const frame = el('iframe', { class: 'clip-player-frame', src, title: title || 'Game video',
     allow: 'autoplay; encrypted-media; picture-in-picture; fullscreen', allowfullscreen: '' }, []);
-  const external = el('a', { class: 'clip-player-external', href: youtubeTimestampUrl(vid, secs), target: '_blank', rel: 'noopener noreferrer' },
+  const external = el('a', { class: 'clip-player-external yt-external', href: youtubeTimestampUrl(vid, secs), target: '_blank', rel: 'noopener noreferrer' },
     [document.createTextNode('Open on YouTube ↗')]);
   const d = openDialog(title || ('Clip at ' + formatTimestamp(secs)), [el('div', { class: 'clip-player-wrap' }, [frame]), external]);
   d.dialog.classList.add('clip-player');
@@ -5306,7 +5308,7 @@ function initClipLinks() {
   document.addEventListener('click', (e) => {
     if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
     const a = e.target.closest && e.target.closest('a[href]');
-    if (!a || a.closest('.clip-player')) return;
+    if (!a || a.closest('.clip-player') || a.classList.contains('yt-external')) return;
     const m = CLIP_URL_RE.exec(a.getAttribute('href'));
     if (!m) return;
     e.preventDefault();
@@ -8301,7 +8303,7 @@ function pointFilmRows(point) {
 }
 
 function youtubeTimestampUrl(vid, secs) {
-  return `https://www.youtube.com/watch?v=${vid}&t=${secs}s`;
+  return `https://www.youtube.com/watch?v=${vid}&t=${Math.max(0, Math.floor(Number(secs) || 0))}s`;
 }
 
 // Every player who appears in a box score this season -- the candidate pullers.
@@ -8581,7 +8583,7 @@ function buildAnnotationQueryPane() {
     const tagsEl = el('span', { class: 'de-result-tags' }, [document.createTextNode(tags.join(' · '))]);
     let linkEl;
     if (r.vid && r.timestamp != null) {
-      const url = `https://www.youtube.com/watch?v=${r.vid}&t=${r.timestamp}s`;
+      const url = youtubeTimestampUrl(r.vid, r.timestamp);
       lastLinks.push(url);
       linkEl = el('a', { class: 'de-result-link', href: url, target: '_blank', rel: 'noopener noreferrer' }, [document.createTextNode('▶ ' + formatTimestamp(r.timestamp))]);
     } else {
