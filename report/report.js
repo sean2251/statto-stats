@@ -5284,6 +5284,37 @@ function openDialog(title, bodyNodes, actions) {
   return { close, dialog };
 }
 
+// ---------- Clip player ----------
+// A timestamped link (…watch?v=ID&t=75s) opened on youtube.com is at the
+// mercy of YouTube's "resume where you left off": if you'd watched that game
+// before, it often starts where you stopped, not at the clip. An embedded
+// player always honours its start time, so a plain click on any such link
+// plays it here instead; Ctrl/⌘/Shift-click or middle-click still opens
+// YouTube in a new tab, and the player links there too.
+const CLIP_URL_RE = /^https:\/\/www\.youtube\.com\/watch\?v=([A-Za-z0-9_-]+)&t=(\d+)s$/;
+function openClipPlayer(vid, secs, title) {
+  const src = `https://www.youtube.com/embed/${vid}?start=${secs}&autoplay=1&rel=0&playsinline=1`;
+  const frame = el('iframe', { class: 'clip-player-frame', src, title: title || 'Game video',
+    allow: 'autoplay; encrypted-media; picture-in-picture; fullscreen', allowfullscreen: '' }, []);
+  const external = el('a', { class: 'clip-player-external', href: youtubeTimestampUrl(vid, secs), target: '_blank', rel: 'noopener noreferrer' },
+    [document.createTextNode('Open on YouTube ↗')]);
+  const d = openDialog(title || ('Clip at ' + formatTimestamp(secs)), [el('div', { class: 'clip-player-wrap' }, [frame]), external]);
+  d.dialog.classList.add('clip-player');
+  return d;
+}
+function initClipLinks() {
+  document.addEventListener('click', (e) => {
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    const a = e.target.closest && e.target.closest('a[href]');
+    if (!a || a.closest('.clip-player')) return;
+    const m = CLIP_URL_RE.exec(a.getAttribute('href'));
+    if (!m) return;
+    e.preventDefault();
+    const label = (a.textContent || '').replace(/^\s*▶\s*/, '').trim();
+    openClipPlayer(m[1], Number(m[2]), label || null);
+  });
+}
+
 // ---------- Live tag sync ----------
 // On the site, video tags live on the server one event at a time,
 // so several people can tag at once -- even the same game -- without sending
@@ -11043,6 +11074,7 @@ function currentViewId() {
 
 // ---------- Bootstrap: build nav + all sections on load ----------
 function init() {
+  initClipLinks();
   if (APP || SYNC) appSeedStorage();
   if (SETUP_MODE) migrateLegacyStorage();
   if (SYNC) syncStart();

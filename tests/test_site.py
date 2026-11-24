@@ -1271,6 +1271,19 @@ class BrowserTests(unittest.TestCase):
         self.assertIn("Throw to", clips)
         self.assertIn("Pull", clips)
         self.assertIn("Backhand", clips)
+        # A timestamped link plays in the page, started at its second (YouTube's
+        # own page would resume wherever you last stopped watching).
+        view.evaluate("""() => { const a = document.createElement('a');
+            a.href = 'https://www.youtube.com/watch?v=abcDEF12345&t=75s'; a.id = 'clip-test'; a.textContent = '▶ Pt 3 · Throw';
+            document.querySelector('#my-clips').appendChild(a); }""")
+        view.route("https://www.youtube.com/**", lambda route: route.fulfill(body="", content_type="text/html"))
+        view.click("#clip-test")
+        frame = view.wait_for_selector(".clip-player iframe")
+        self.assertIn("/embed/abcDEF12345?start=75&autoplay=1", frame.get_attribute("src"))
+        self.assertEqual(view.text_content(".clip-player .cropper-title"), "Pt 3 · Throw")
+        self.assertEqual(view.url.split("#")[0].endswith("/view"), True)
+        view.click(".clip-player button:has-text('Close')")
+        self.assertIsNone(view.query_selector(".clip-player"))
         ctx.close()
         self.assertEqual(self.errors, [])
 

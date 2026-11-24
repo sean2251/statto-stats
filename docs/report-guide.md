@@ -12,6 +12,11 @@ Each team's pages split into two:
   Read-only and mobile-friendly.
 
 The sections below walk through each tab; the heading says which one it's in.
+
+**Clip links** (every ▶ timestamp) play the game video right in the page,
+starting at that moment. Ctrl/⌘-click one, or use **Open on YouTube** in the
+player, to watch on YouTube instead — but YouTube may resume where you last
+stopped watching that video rather than at the clip.
 For the taggers' tagging page, see [the tagging guide](tagging.md).
 
 ## Set up  ·  *Season setup*
