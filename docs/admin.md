@@ -63,8 +63,10 @@ Everything saves to the site as you go; the pill at the bottom right says
   the file's values replace the same fields and the rest are kept. Taggers'
   hubs update by themselves; publish the Team Report again to include them.
 - **Publishing:** **Publish Team Report** on the Set up tab puts the current
-  report at `<team address>/view`. It's a snapshot: publish again after
-  changes. **Preview Team Report** shows it first.
+  report at `<team address>/view`. A box shows what it's doing (it can take up
+  to a minute on a big season) and then the link, or what went wrong — if it
+  fails, your team keeps the last report you published. It's a snapshot:
+  publish again after changes. **Preview Team Report** shows it first.
 
 ## Passwords
 

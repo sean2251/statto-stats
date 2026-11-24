@@ -13,8 +13,9 @@ Each team's pages split into two:
 
 The sections below walk through each tab; the heading says which one it's in.
 
-**Clip links** (every ▶ timestamp) play the game video right in the page,
-starting at that moment. Ctrl/⌘-click one, or use **Open on YouTube** in the
+**Clip links** (every ▶ timestamp) play the game video in a player docked at
+the right of the screen (at the bottom, on a phone), beside the links, starting
+at that moment; click another link to switch clips, ✕ to close. Ctrl/⌘-click one, or use **Open on YouTube** in the
 player, to watch on YouTube instead — but YouTube may resume where you last
 stopped watching that video rather than at the clip.
 For the taggers' tagging page, see [the tagging guide](tagging.md).
