@@ -15,7 +15,11 @@ The sections below walk through each tab; the heading says which one it's in.
 
 **Clip links** (every ▶ timestamp) play the game video in a player docked at
 the right of the screen (at the bottom, on a phone), beside the links, starting
-at that moment; click another link to switch clips, ✕ to close. Ctrl/⌘-click one, or use **Open on YouTube** in the
+at that moment; click another link to switch clips, ✕ to close. Drag the
+player's inner edge (its left edge, or its top edge on a phone) to make it
+bigger or smaller; it remembers the size. **Pop out ⧉** moves the video into a
+window of its own that you can drag to another screen: while it's open, clip
+links play there, and **Back into the page** returns it to the side. Ctrl/⌘-click one, or use **Open on YouTube** in the
 player, to watch on YouTube instead — but YouTube may resume where you last
 stopped watching that video rather than at the clip.
 For the taggers' tagging page, see [the tagging guide](tagging.md).

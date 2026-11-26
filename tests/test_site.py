@@ -1296,6 +1296,47 @@ class BrowserTests(unittest.TestCase):
         box = view.query_selector(".clip-dock").bounding_box()
         main = view.query_selector("main").bounding_box()
         self.assertLessEqual(main["x"] + main["width"], box["x"])
+        # Drag its left edge to resize it; the page follows, and the size sticks.
+        handle = view.query_selector(".clip-dock-resizer").bounding_box()
+        x, y = handle["x"] + handle["width"] / 2, handle["y"] + handle["height"] / 2
+        view.mouse.move(x, y)
+        view.mouse.down()
+        view.mouse.move(x - 150, y, steps=5)
+        view.mouse.up()
+        wider = view.query_selector(".clip-dock").bounding_box()
+        self.assertAlmostEqual(wider["width"], box["width"] + 150, delta=4)
+        self.assertLessEqual(view.query_selector("main").bounding_box()["x"] + view.query_selector("main").bounding_box()["width"], wider["x"])
+        self.assertIn('"w":', view.evaluate("() => localStorage.getItem('statto-clip-dock-size')"))
+
+        # Pop it out into a window of its own (to move to another screen).
+        popup_requests = []
+        def popup_youtube(route):
+            popup_requests.append((route.request.url, route.request.headers.get("referer")))
+            route.fulfill(body="", content_type="text/html")
+        view.context.route("https://www.youtube.com/**", popup_youtube)
+        with view.context.expect_page() as popup:
+            view.click(".clip-dock-popout")
+        win = popup.value
+        frame = win.wait_for_selector("#stage iframe")
+        self.assertIn("/embed/abcDEF12345?start=", frame.get_attribute("src"))
+        self.assertEqual(win.text_content("#title"), "Pt 3 · Throw")
+        # It keeps the report's address, so YouTube gets a Referer (no Error 153).
+        wait_until(lambda: any("start=" in u for u, _ in popup_requests), message="the pop-out's embed request")
+        self.assertTrue(all(r and r.startswith(self.base) for _, r in popup_requests), popup_requests)
+        self.assertIsNone(view.query_selector(".clip-dock"))
+        # While it's open, clip links play there.
+        view.evaluate("""() => { const a = document.createElement('a');
+            a.href = 'https://www.youtube.com/watch?v=xyzXYZ98765&t=200s'; a.id = 'clip-test-2'; a.textContent = '▶ Pt 9 · Block';
+            document.querySelector('#my-clips').appendChild(a); }""")
+        view.click("#clip-test-2")
+        wait_until(lambda: "start=200" in (win.get_attribute("#stage iframe", "src") or ""), message="the next clip in the pop-out")
+        self.assertEqual(win.text_content("#title"), "Pt 9 · Block")
+        self.assertIsNone(view.query_selector(".clip-dock"))
+        # Back into the page: the dock returns with the same clip.
+        win.click("#back")
+        view.wait_for_selector(".clip-dock iframe")
+        self.assertIn("/embed/xyzXYZ98765?start=", view.get_attribute(".clip-dock iframe", "src"))
+        self.assertEqual(view.text_content(".clip-dock-title"), "Pt 9 · Block")
         view.click(".clip-dock-close")
         self.assertIsNone(view.query_selector(".clip-dock"))
         ctx.close()
