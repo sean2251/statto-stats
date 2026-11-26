@@ -15,7 +15,28 @@ The sections below walk through each tab; the heading says which one it's in.
 
 **Clip links** (every ▶ timestamp) play the game video in a player docked at
 the right of the screen (at the bottom, on a phone), beside the links, starting
-at that moment; click another link to switch clips, ✕ to close. Ctrl/⌘-click one, or use **Open on YouTube** in the
+at that moment; click another link to switch clips, ✕ to close. Drag the
+player's inner edge (its left edge, or its top edge on a phone) to make it
+bigger or smaller; it remembers the size. **Pop out ⧉** moves the video into a
+window of its own that you can drag to another screen: while it's open, clip
+links play there, and **Back into the page** returns it to the side.
+
+**Film-room controls** sit under every game video — this clip player, its
+pop-out, Field Analysis's video and the tagging page:
+
+| Button | Key | Does |
+|---|---|---|
+| ⏮ | R | Back to the start of the clip (on the tagging page: the event's timestamp) |
+| −5s / +5s | tap J / tap L, or Shift+← / Shift+→ | Jump back / forward 5 seconds |
+| ◀◀ (hold) | hold J | Rewind — faster the longer you hold. YouTube can't play backwards, so it's a quick series of small jumps back |
+| ▶▶ (hold) | hold L | Fast-forward at 2× (YouTube's fastest) |
+| ‹ / › | < / > | Step one frame back / forward (pauses) |
+| ⏯ | K | Play / pause |
+| 0.25× … 2× | [ / ] | Playback speed |
+| ⟲ Loop | O | Replay the 10 seconds from the clip's start, over and over |
+
+Keys work whenever you're not typing in a box; if you've clicked into the
+video itself, YouTube's own keys take over until you click back on the page. Ctrl/⌘-click one, or use **Open on YouTube** in the
 player, to watch on YouTube instead — but YouTube may resume where you last
 stopped watching that video rather than at the clip.
 For the taggers' tagging page, see [the tagging guide](tagging.md).

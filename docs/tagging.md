@@ -152,6 +152,13 @@ defensive possession), and it fills in **only** the tags listed — anything you
 set yourself is left alone, so pressing **2** after **1** keeps the Release
 from **1**. All shortcuts pause while you're typing in a text box.
 
+**Controlling the video.** Under the video are film-room controls, with keys
+that don't clash with the ones above: **K** play/pause, hold **J** to rewind
+and hold **L** to fast-forward (tap them to jump 5 seconds), **<** / **>** to
+step a frame, **[** / **]** for slower / faster, **R** back to this event's
+timestamp, and **O** to loop the 10 seconds from it. See [the full
+list](report-guide.md) in the report guide.
+
 The **Stall** dropdown spells out the stall count each band covers — *Low
 (< stall 3)*, *Mid (stall 3–7)*, *High (stall > 7)* — so you don't have to
 guess where the boundaries are.

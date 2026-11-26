@@ -1676,9 +1676,18 @@ function buildFieldAnalysisSection() {
 
   // Clicking a throw loads its game's video and seeks to the tagged timestamp.
   let faPlayer = null, faPlayerVid = null;
+  // Film-room controls under the video (built here, once faPlayer exists).
+  let faClipStart = null;
+  const faFilm = buildFilmControls(ytPlayerAdapter(() => faPlayer), {
+    clipStart: () => faClipStart,
+    available: () => section.classList.contains('active') && videoCol.style.display !== 'none' && !!faPlayer,
+  });
+  videoCol.insertBefore(faFilm.el, videoNote);
   function playThrow(p, gameIndex, rec) {
     const vid = parseYouTubeId(loadSetupData().videoLinks[gameIndex]);
     const ts = (rec && rec.timestamp != null) ? rec.timestamp : null;
+    faClipStart = ts;
+    faFilm.stopLoop();
     if (!vid) { faPlayer = null; faPlayerVid = null; playerHost.innerHTML = ''; videoNote.textContent = 'No video link for this game — add one on the Set up tab.'; return; }
     if (location.protocol === 'file:') {
       playerHost.innerHTML = ''; faPlayer = null; faPlayerVid = null;
@@ -5312,35 +5321,504 @@ function youtubeEmbedUrl(vid, secs, extra) {
   return `https://www.youtube.com/embed/${vid}?${q}`;
 }
 let clipDock = null;
+let clipCurrent = null;   // { vid, secs, title, startedAt, lastTime } -- the clip now playing
+let clipPopup = null;     // the pop-out window, while it's open
+const CLIP_DOCK_SIZE_KEY = 'statto-clip-dock-size';
+
+// The dock's size (its width beside the page; its video height on a phone),
+// remembered per browser. Applied through CSS variables so the page beside it
+// makes room as it changes.
+function clipDockNarrow() { return window.matchMedia && window.matchMedia('(max-width: 900px)').matches; }
+function applyClipDockSize(size) {
+  const root = document.documentElement.style;
+  if (size && size.w) root.setProperty('--clip-dock-w', Math.round(size.w) + 'px');
+  if (size && size.h) root.setProperty('--clip-dock-h', Math.round(size.h) + 'px');
+}
+function loadClipDockSize() {
+  try { return JSON.parse(localStorage.getItem(CLIP_DOCK_SIZE_KEY) || 'null') || {}; } catch (e) { return {}; }
+}
+function saveClipDockSize(size) {
+  try { localStorage.setItem(CLIP_DOCK_SIZE_KEY, JSON.stringify(size)); } catch (e) {}
+}
+function clampClipDockSize(size) {
+  const out = Object.assign({}, size);
+  if (out.w != null) out.w = Math.max(280, Math.min(out.w, window.innerWidth * 0.8));
+  if (out.h != null) out.h = Math.max(120, Math.min(out.h, window.innerHeight * 0.7));
+  return out;
+}
+// Drag the dock's inner edge (left on a wide screen, top on a phone) to
+// resize it; arrow keys do the same when the handle has focus.
+function buildClipDockResizer(root) {
+  const handle = el('div', { class: 'clip-dock-resizer', role: 'separator', tabindex: '0', 'aria-label': 'Resize the video', title: 'Drag to resize' }, []);
+  let size = loadClipDockSize();
+  const current = () => {
+    const r = root.getBoundingClientRect();
+    return clipDockNarrow() ? { h: root.querySelector('.clip-player-wrap').getBoundingClientRect().height } : { w: r.width };
+  };
+  const set = (patch, save) => {
+    size = Object.assign({}, size, clampClipDockSize(patch));
+    applyClipDockSize(size);
+    if (save) saveClipDockSize(size);
+  };
+  handle.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    // Follow the pointer on the whole window (not just the thin handle), so a
+    // fast drag never loses it -- and the video can't swallow it (.resizing).
+    try { handle.setPointerCapture(e.pointerId); } catch (err) {}
+    const start = { x: e.clientX, y: e.clientY }, from = current();
+    root.classList.add('resizing');
+    const move = (ev) => {
+      if (clipDockNarrow()) set({ h: from.h - (ev.clientY - start.y) }, false);
+      else set({ w: from.w - (ev.clientX - start.x) }, false);
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', up);
+      root.classList.remove('resizing');
+      saveClipDockSize(size);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', up);
+  });
+  handle.addEventListener('keydown', (e) => {
+    const narrow = clipDockNarrow(), step = e.shiftKey ? 80 : 24, c = current();
+    let d = 0;
+    if (narrow && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) d = e.key === 'ArrowUp' ? step : -step;
+    if (!narrow && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) d = e.key === 'ArrowLeft' ? step : -step;
+    if (!d) return;
+    e.preventDefault();
+    set(narrow ? { h: c.h + d } : { w: c.w + d }, true);
+  });
+  applyClipDockSize(clampClipDockSize(size));
+  return handle;
+}
+
+// ---------- Film-room controls ----------
+// One control bar for every embedded game video (the clip player, its pop-out
+// window, the tagging page, Field Analysis): play/pause, jump ±5s, step a frame,
+// hold to rewind or fast-forward, playback speed, back to the clip's start, and
+// loop the play. The same keys work everywhere (while you're not typing):
+//   K play/pause · hold J rewind, hold L fast-forward (tap: ∓5s)
+//   < > step a frame · [ ] slower / faster · R back to the clip · O loop
+//   Shift+← / Shift+→ ∓5s
+// YouTube can't play backwards, so rewinding is a quick series of small jumps
+// back (faster the longer you hold); and it tops out at 2× forwards.
+const FILM_RATES = [0.25, 0.5, 1, 1.5, 2];
+const FILM_FRAME = 1 / 30;
+const FILM_JUMP = 5;
+const FILM_LOOP_SECS = 10;
+const FILM_KEYS_HELP = 'K play/pause · hold J rewind · hold L fast-forward · < > frame · [ ] speed · R back to clip · O loop';
+
+// The two ways we hold a YouTube player, behind one small interface.
+// A YT.Player (tagging page, Field Analysis):
+function ytPlayerAdapter(getPlayer) {
+  const p = () => { const x = getPlayer(); return x && typeof x.getCurrentTime === 'function' ? x : null; };
+  return {
+    ready: () => !!p(),
+    time: () => (p() ? p().getCurrentTime() || 0 : 0),
+    seek: (t) => { if (p()) p().seekTo(Math.max(0, t), true); },
+    play: () => { if (p()) p().playVideo(); },
+    pause: () => { if (p()) p().pauseVideo(); },
+    playing: () => !!p() && p().getPlayerState() === 1,
+    rate: () => (p() && p().getPlaybackRate ? p().getPlaybackRate() : 1),
+    setRate: (r) => { if (p() && p().setPlaybackRate) p().setPlaybackRate(r); },
+    rates: () => { const r = p() && p().getAvailablePlaybackRates && p().getAvailablePlaybackRates(); return r && r.length ? r : FILM_RATES; },
+  };
+}
+// A plain embed iframe (the clip player and its pop-out), driven by YouTube's
+// postMessage protocol -- the one its own JS API speaks. The player reports its
+// time, state and speed back once asked to listen; between reports the time is
+// carried forward by the clock.
+function iframeAdapter(frame, startSecs) {
+  const win = frame.ownerDocument.defaultView;
+  const st = { time: startSecs || 0, at: Date.now(), state: -1, rate: 1, rates: null, heard: false };
+  const send = (func, args) => {
+    try { frame.contentWindow.postMessage(JSON.stringify({ event: 'command', func, args: args || [], id: 'statto-clip', channel: 'widget' }), 'https://www.youtube.com'); } catch (e) {}
+  };
+  const now = () => st.time + (st.state === 1 ? (Date.now() - st.at) / 1000 * st.rate : 0);
+  const onMsg = (e) => {
+    if (e.source !== frame.contentWindow) return;
+    let d = e.data;
+    try { if (typeof d === 'string') d = JSON.parse(d); } catch (err) { return; }
+    if (!d || !d.info || (d.event !== 'infoDelivery' && d.event !== 'initialDelivery')) return;
+    const i = d.info;
+    st.heard = true;
+    if (typeof i.playerState === 'number') { if (i.playerState !== st.state) { st.time = now(); st.at = Date.now(); } st.state = i.playerState; }
+    if (typeof i.currentTime === 'number') { st.time = i.currentTime; st.at = Date.now(); }
+    if (typeof i.playbackRate === 'number') st.rate = i.playbackRate;
+    if (Array.isArray(i.availablePlaybackRates) && i.availablePlaybackRates.length) st.rates = i.availablePlaybackRates;
+  };
+  win.addEventListener('message', onMsg);
+  const listen = () => { try { frame.contentWindow.postMessage(JSON.stringify({ event: 'listening', id: 'statto-clip', channel: 'widget' }), 'https://www.youtube.com'); } catch (e) {} };
+  frame.addEventListener('load', listen);
+  // Autoplay starts it: assume playing until it says otherwise.
+  st.state = 1;
+  return {
+    ready: () => frame.isConnected,
+    time: now,
+    seek: (t) => { t = Math.max(0, t); send('seekTo', [t, true]); st.time = t; st.at = Date.now(); },
+    play: () => { st.time = now(); st.at = Date.now(); send('playVideo'); st.state = 1; },
+    pause: () => { st.time = now(); st.at = Date.now(); send('pauseVideo'); st.state = 2; },
+    playing: () => st.state === 1,
+    rate: () => st.rate,
+    setRate: (r) => { st.time = now(); st.at = Date.now(); send('setPlaybackRate', [r]); st.rate = r; },
+    rates: () => st.rates || FILM_RATES,
+    dispose: () => win.removeEventListener('message', onMsg),
+  };
+}
+
+// Which bar the keys drive: the most recently used one that's on screen.
+const filmControllers = [];
+function activeFilmController() {
+  let best = null;
+  filmControllers.forEach(c => { if (c.available() && (!best || c.used > best.used)) best = c; });
+  return best;
+}
+function filmKeyTargetsTyping(doc) {
+  const a = doc.activeElement;
+  const tag = (a && a.tagName) || '';
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (a && a.isContentEditable);
+}
+function bindFilmKeys(doc, pick) {
+  const on = (down) => (e) => {
+    if (e.altKey || e.ctrlKey || e.metaKey || filmKeyTargetsTyping(doc)) return;
+    const c = pick();
+    if (c && c.handleKey(e, down)) e.preventDefault();
+  };
+  doc.addEventListener('keydown', on(true));
+  doc.addEventListener('keyup', on(false));
+  // Let go of a held J/L if the window loses focus mid-hold.
+  doc.defaultView.addEventListener('blur', () => { const c = pick(); if (c) c.releaseAll(); });
+}
+let filmKeysBound = false;
+
+const FILM_CSS = `
+.film-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; padding: 6px 0 2px; font-size: 12px; color: var(--chalk-dim, #aeb8ad); }
+.film-bar button { font: inherit; font-size: 12px; line-height: 1; color: var(--chalk, #e8ece6); background: rgba(var(--chalk-rgb, 232,236,230),0.06);
+  border: 1px solid rgba(var(--chalk-rgb, 232,236,230),0.18); border-radius: 7px; padding: 6px 8px; cursor: pointer; min-width: 30px; touch-action: manipulation; user-select: none; -webkit-user-select: none; }
+.film-bar button:hover { background: rgba(var(--chalk-rgb, 232,236,230),0.14); }
+.film-bar button.on { background: var(--chalk, #e8ece6); color: var(--ink, #0d110e); border-color: var(--chalk, #e8ece6); }
+.film-bar .film-group { display: inline-flex; gap: 2px; }
+.film-bar .film-sep { width: 1px; align-self: stretch; background: rgba(var(--chalk-rgb, 232,236,230),0.15); margin: 0 2px; }
+.film-bar .film-readout { margin-left: auto; font-family: var(--mono, ui-monospace, Menlo, Consolas, monospace); font-size: 11.5px; white-space: nowrap; color: var(--chalk, #e8ece6); }
+.film-bar .film-keys { flex-basis: 100%; font-size: 10.5px; opacity: 0.75; }
+@media (hover: none) { .film-bar .film-keys { display: none; } }
+`;
+function ensureFilmCss(doc) {
+  if (doc.getElementById('film-controls-css')) return;
+  const st = doc.createElement('style');
+  st.id = 'film-controls-css';
+  st.textContent = FILM_CSS;
+  doc.head.appendChild(st);
+}
+
+// The bar itself. opts.clipStart() gives the clip's start (for "back to the
+// clip" and the loop), or null; opts.available() says whether this bar is the
+// one on screen (for keys); opts.doc is the document it lives in.
+function buildFilmControls(adapter, opts) {
+  opts = opts || {};
+  const doc = opts.doc || document;
+  ensureFilmCss(doc);
+  const mk = (tag, attrs, kids) => {
+    const e = doc.createElement(tag);
+    Object.keys(attrs || {}).forEach(k => { if (k === 'class') e.className = attrs[k]; else e.setAttribute(k, attrs[k]); });
+    (kids || []).forEach(k => e.appendChild(typeof k === 'string' ? doc.createTextNode(k) : k));
+    return e;
+  };
+  const btn = (label, title, cls) => mk('button', { type: 'button', title, 'aria-label': title, class: cls || '' }, [label]);
+  const bar = mk('div', { class: 'film-bar', role: 'group', 'aria-label': 'Playback controls' }, []);
+  const toClip = btn('⏮', 'Back to the start of the clip (R)', 'film-to-clip');
+  const back5 = btn('−5s', 'Back 5 seconds (tap J, or Shift+←)', 'film-back');
+  const rew = btn('◀◀', 'Rewind — hold (hold J)', 'film-rew');
+  const frameBack = btn('‹', 'Back one frame (<)', 'film-frame-back');
+  const playBtn = btn('⏯', 'Play / pause (K)', 'film-play');
+  const frameFwd = btn('›', 'Forward one frame (>)', 'film-frame-fwd');
+  const ff = btn('▶▶', 'Fast-forward — hold (hold L)', 'film-ff');
+  const fwd5 = btn('+5s', 'Forward 5 seconds (tap L, or Shift+→)', 'film-fwd');
+  const speeds = mk('span', { class: 'film-group film-speeds', role: 'group', 'aria-label': 'Speed' }, []);
+  const loopBtn = btn('⟲ Loop', 'Loop the play: replay ' + FILM_LOOP_SECS + ' seconds from the clip’s start (O)', 'film-loop');
+  const readout = mk('span', { class: 'film-readout', 'aria-live': 'off' }, []);
+  const sep = () => mk('span', { class: 'film-sep' }, []);
+  [toClip, sep(), back5, rew, frameBack, playBtn, frameFwd, ff, fwd5, sep(), speeds, sep(), loopBtn, readout].forEach(x => bar.appendChild(x));
+  if (opts.showKeys !== false) bar.appendChild(mk('span', { class: 'film-keys' }, ['Keys: ' + FILM_KEYS_HELP]));
+
+  const ctl = { used: Date.now(), available: () => bar.isConnected && (!opts.available || opts.available()) };
+  const touch = () => { ctl.used = Date.now(); };
+  bar.addEventListener('pointerdown', touch);
+
+  let shuttle = null;       // { dir, t0, timer, wasPlaying, prevRate, pos }
+  let loop = null;          // { start, end }
+  const clipStart = () => { const v = opts.clipStart ? opts.clipStart() : null; return v == null || isNaN(v) ? null : Number(v); };
+
+  function rateList() {
+    // The usual steps only (YouTube offers eight), so the bar stays short.
+    const avail = adapter.rates();
+    const r = FILM_RATES.filter(x => avail.indexOf(x) >= 0);
+    return r.length ? r : FILM_RATES;
+  }
+  function renderSpeeds() {
+    const list = rateList();
+    if (speeds.dataset.list === list.join(',')) return;
+    speeds.dataset.list = list.join(',');
+    speeds.innerHTML = '';
+    list.forEach(r => {
+      const b = btn(r + '×', 'Play at ' + r + '× speed ([ and ] step through)', 'film-speed');
+      b.dataset.rate = String(r);
+      b.addEventListener('click', () => { touch(); adapter.setRate(r); render(); });
+      speeds.appendChild(b);
+    });
+  }
+  function render() {
+    renderSpeeds();
+    const rate = shuttle && shuttle.dir > 0 ? shuttle.prevRate : adapter.rate();
+    speeds.querySelectorAll('button').forEach(b => b.classList.toggle('on', Number(b.dataset.rate) === rate));
+    playBtn.textContent = adapter.playing() && !(shuttle && shuttle.dir < 0) ? '❚❚' : '▶';
+    loopBtn.classList.toggle('on', !!loop);
+    rew.classList.toggle('on', !!(shuttle && shuttle.dir < 0));
+    ff.classList.toggle('on', !!(shuttle && shuttle.dir > 0));
+    toClip.disabled = clipStart() == null;
+    const t = formatTimestamp(adapter.time());
+    readout.textContent = shuttle
+      ? (shuttle.dir < 0 ? '◀◀ ' + shuttleSpeed() + '× · ' : '▶▶ ' + Math.max.apply(null, rateList()) + '× · ') + t
+      : t + ' · ' + adapter.rate() + '×';
+  }
+  function shuttleSpeed() { const held = (Date.now() - shuttle.t0) / 1000; return held < 1 ? 1 : held < 2.5 ? 2 : 4; }
+
+  function seekBy(d) { adapter.seek(adapter.time() + d); render(); }
+  function step(d) { if (adapter.playing()) adapter.pause(); adapter.seek(adapter.time() + d); render(); }
+  function togglePlay() { if (adapter.playing()) adapter.pause(); else adapter.play(); render(); }
+  function toClipStart() { const c = clipStart(); if (c != null) { adapter.seek(c); adapter.play(); } render(); }
+  function changeSpeed(dir) {
+    const list = rateList(), cur = adapter.rate();
+    let i = list.findIndex(r => r >= cur - 1e-6);
+    if (i < 0) i = list.length - 1;
+    const j = Math.max(0, Math.min(list.length - 1, list[i] === cur ? i + dir : (dir > 0 ? i : i - 1)));
+    adapter.setRate(list[j]); render();
+  }
+  function toggleLoop() {
+    if (loop) loop = null;
+    else {
+      const c = clipStart();
+      const start = c != null ? c : adapter.time();
+      loop = { start, end: start + FILM_LOOP_SECS };
+      adapter.seek(start); adapter.play();
+    }
+    render();
+  }
+  function shuttleStart(dir) {
+    if (shuttle || !adapter.ready()) return;
+    shuttle = { dir, t0: Date.now(), wasPlaying: adapter.playing(), prevRate: adapter.rate(), timer: null };
+    if (dir > 0) { adapter.setRate(Math.max.apply(null, rateList())); adapter.play(); }
+    else {
+      adapter.pause();
+      shuttle.pos = adapter.time();
+      shuttle.timer = setInterval(() => {
+        shuttle.pos = Math.max(0, shuttle.pos - shuttleSpeed() * 0.15);
+        adapter.seek(shuttle.pos);
+        render();
+      }, 150);
+    }
+    render();
+  }
+  function shuttleStop() {
+    if (!shuttle) return;
+    clearInterval(shuttle.timer);
+    const s = shuttle;
+    shuttle = null;
+    if (s.dir > 0) adapter.setRate(s.prevRate);
+    if (s.wasPlaying) adapter.play(); else adapter.pause();
+    render();
+  }
+  // Hold buttons: press and hold to shuttle; let go to stop.
+  [[rew, -1], [ff, 1]].forEach(([b, dir]) => {
+    b.addEventListener('pointerdown', (e) => { e.preventDefault(); touch(); try { b.setPointerCapture(e.pointerId); } catch (err) {} shuttleStart(dir); });
+    ['pointerup', 'pointercancel', 'lostpointercapture'].forEach(ev => b.addEventListener(ev, shuttleStop));
+    b.addEventListener('keydown', (e) => { if ((e.key === 'Enter' || e.key === ' ') && !e.repeat) { e.preventDefault(); shuttleStart(dir); } });
+    b.addEventListener('keyup', (e) => { if (e.key === 'Enter' || e.key === ' ') shuttleStop(); });
+  });
+  toClip.addEventListener('click', () => { touch(); toClipStart(); });
+  back5.addEventListener('click', () => { touch(); seekBy(-FILM_JUMP); });
+  fwd5.addEventListener('click', () => { touch(); seekBy(FILM_JUMP); });
+  frameBack.addEventListener('click', () => { touch(); step(-FILM_FRAME); });
+  frameFwd.addEventListener('click', () => { touch(); step(FILM_FRAME); });
+  playBtn.addEventListener('click', () => { touch(); togglePlay(); });
+  loopBtn.addEventListener('click', () => { touch(); toggleLoop(); });
+
+  // J / L: hold to shuttle, tap to jump.
+  const held = {};
+  ctl.releaseAll = () => { Object.keys(held).forEach(k => { clearTimeout(held[k]); delete held[k]; }); shuttleStop(); };
+  ctl.handleKey = (e, down) => {
+    const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    if (k === 'j' || k === 'l') {
+      const dir = k === 'j' ? -1 : 1;
+      if (down) {
+        if (e.repeat || held[k] != null) return true;
+        touch();
+        held[k] = setTimeout(() => { held[k] = 0; shuttleStart(dir); }, 220);
+      } else if (held[k] != null) {
+        const wasShuttling = held[k] === 0;
+        clearTimeout(held[k]); delete held[k];
+        if (wasShuttling) shuttleStop(); else seekBy(dir * FILM_JUMP);
+      }
+      return true;
+    }
+    if (!down) return false;
+    if (e.shiftKey && (k === 'ArrowLeft' || k === 'ArrowRight')) { touch(); seekBy(k === 'ArrowLeft' ? -FILM_JUMP : FILM_JUMP); return true; }
+    if (e.shiftKey && k !== '<' && k !== '>') return false;
+    switch (k) {
+      case 'k': touch(); togglePlay(); return true;
+      case '<': touch(); step(-FILM_FRAME); return true;
+      case '>': touch(); step(FILM_FRAME); return true;
+      case '[': touch(); changeSpeed(-1); return true;
+      case ']': touch(); changeSpeed(1); return true;
+      case 'r': if (clipStart() == null) return false; touch(); toClipStart(); return true;
+      case 'o': touch(); toggleLoop(); return true;
+      default: return false;
+    }
+  };
+
+  // Keep the readout, buttons and loop in step with the video.
+  const tick = setInterval(() => {
+    if (!bar.isConnected) { clearInterval(tick); if (shuttle) clearInterval(shuttle.timer); const i = filmControllers.indexOf(ctl); if (i >= 0) filmControllers.splice(i, 1); return; }
+    if (loop && !shuttle && adapter.playing()) {
+      const t = adapter.time();
+      if (t >= loop.end || t < loop.start - 1) adapter.seek(loop.start);
+    }
+    render();
+  }, 250);
+  ctl.stopLoop = () => { loop = null; render(); };
+  ctl.el = bar;
+  filmControllers.push(ctl);
+  if (!filmKeysBound) { filmKeysBound = true; bindFilmKeys(document, activeFilmController); }
+  render();
+  return ctl;
+}
+
+// Where the playing clip has got to, so popping it out (or back in) carries on
+// from there rather than restarting.
+function clipNow() {
+  if (!clipCurrent) return 0;
+  if (clipCurrent.adapter) return Math.floor(clipCurrent.adapter.time());
+  return clipCurrent.secs + Math.floor((Date.now() - clipCurrent.startedAt) / 1000);
+}
+function clipFrame(doc, vid, secs, title) {
+  const f = doc.createElement('iframe');
+  f.className = 'clip-player-frame';
+  f.src = youtubeEmbedUrl(vid, secs, { enablejsapi: '1' });
+  f.title = title || 'Game video';
+  f.setAttribute('referrerpolicy', 'strict-origin-when-cross-origin');
+  f.setAttribute('allow', 'autoplay; encrypted-media; picture-in-picture; fullscreen');
+  f.setAttribute('allowfullscreen', '');
+  return f;
+}
+// A clip's video plus its control bar, in `holder` (the dock, or the pop-out).
+function mountClip(doc, wrap, barHolder, vid, secs, title, available) {
+  if (clipCurrent && clipCurrent.adapter && clipCurrent.adapter.dispose) clipCurrent.adapter.dispose();
+  wrap.innerHTML = '';
+  barHolder.innerHTML = '';
+  const frame = clipFrame(doc, vid, secs, title);
+  wrap.appendChild(frame);
+  const adapter = iframeAdapter(frame, secs);
+  // The clip's own start (clipCurrent.secs), which can differ from where the
+  // video starts (coming back from the pop-out part-way through).
+  const ctl = buildFilmControls(adapter, { doc, clipStart: () => (clipCurrent && clipCurrent.adapter === adapter ? clipCurrent.secs : secs), available });
+  barHolder.appendChild(ctl.el);
+  clipCurrent = { vid, secs, title, startedAt: Date.now(), adapter, ctl };
+}
+
 function closeClipPlayer() {
   if (!clipDock) return;
   clipDock.root.remove();
   document.body.classList.remove('clip-dock-open');
   document.removeEventListener('keydown', clipDock.onKey);
   clipDock = null;
+  if (!clipPopupOpen()) {
+    if (clipCurrent && clipCurrent.adapter && clipCurrent.adapter.dispose) clipCurrent.adapter.dispose();
+    clipCurrent = null;
+  }
 }
-function openClipPlayer(vid, secs, title) {
+function clipPopupOpen() { return !!(clipPopup && !clipPopup.closed); }
+
+// The pop-out: the clip in a window of its own, to drag to another screen.
+// Its page is written in from here (not a blob: URL), so it keeps this page's
+// address and YouTube gets the Referer it needs. While it's open, clip links
+// play in it; "Back into the page" (or closing it) returns them to the dock.
+function popOutClip() {
+  if (!clipCurrent) return;
+  const at = clipNow();
+  const w = window.open('', 'statto-clip-player', 'popup,width=960,height=680');
+  if (!w) { alert('Your browser blocked the pop-out window — allow pop-ups for this site to use it.'); return; }
+  clipPopup = w;
+  const doc = w.document;
+  doc.open();
+  doc.write(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Game video</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0d110e; color: #e8ece6; font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  body { display: flex; flex-direction: column; }
+  header { display: flex; align-items: center; gap: 12px; padding: 8px 12px; }
+  #title { flex: 1; min-width: 0; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  header a, header button { color: #aeb8ad; background: none; border: 1px solid rgba(232,236,230,0.2); border-radius: 999px; padding: 4px 10px; font: inherit; cursor: pointer; text-decoration: none; white-space: nowrap; }
+  header a:hover, header button:hover { color: #e8ece6; }
+  #stage { position: relative; flex: 1; background: #000; }
+  #stage iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+  #film { padding: 2px 12px 8px; }
+</style></head><body><header><span id="title"></span><a id="yt" target="_blank" rel="noopener noreferrer">Open on YouTube ↗</a><button id="back" type="button">Back into the page</button></header><div id="stage"></div><div id="film"></div></body></html>`);
+  doc.close();
+  // The same keys work in the pop-out, for its own bar.
+  bindFilmKeys(doc, () => (clipCurrent && clipCurrent.ctl && clipCurrent.ctl.available() ? clipCurrent.ctl : null));
+  doc.getElementById('back').addEventListener('click', () => {
+    const t = clipNow(), c = clipCurrent;
+    clipPopup = null;
+    w.close();
+    if (c) openClipPlayer(c.vid, t, c.title, c.secs);
+  });
+  // Leaving the report closes its pop-out too, so it never outlives the page.
+  window.addEventListener('pagehide', () => { try { w.close(); } catch (e) {} }, { once: true });
+  const c = clipCurrent;
+  closeClipPlayer();
+  clipCurrent = c;
+  playInPopup(c.vid, at, c.title, c.secs);
+  try { w.focus(); } catch (e) {}
+}
+function playInPopup(vid, secs, title, clipStart) {
+  const doc = clipPopup.document;
+  mountClip(doc, doc.getElementById('stage'), doc.getElementById('film'), vid, secs, title, () => clipPopupOpen());
+  if (clipStart != null) clipCurrent.secs = clipStart;
+  doc.getElementById('title').textContent = title || ('Clip at ' + formatTimestamp(secs));
+  doc.title = (title || 'Clip') + ' — game video';
+  doc.getElementById('yt').href = youtubeTimestampUrl(vid, secs);
+}
+
+// clipStart (optional): where the clip itself begins, when the video is to
+// start elsewhere (coming back from the pop-out part-way through).
+function openClipPlayer(vid, secs, title, clipStart) {
+  if (clipPopupOpen()) { playInPopup(vid, secs, title, clipStart); try { clipPopup.focus(); } catch (e) {} return null; }
   if (!clipDock) {
     const titleEl = el('div', { class: 'clip-dock-title' }, []);
+    const popBtn = el('button', { class: 'clip-dock-btn clip-dock-popout', type: 'button', title: 'Open the video in its own window, to move to another screen' }, [document.createTextNode('Pop out ⧉')]);
+    popBtn.addEventListener('click', popOutClip);
     const closeBtn = el('button', { class: 'clip-dock-close', type: 'button', 'aria-label': 'Close the video' }, [document.createTextNode('✕')]);
     closeBtn.addEventListener('click', closeClipPlayer);
     const wrap = el('div', { class: 'clip-player-wrap' }, []);
+    const barHolder = el('div', { class: 'clip-dock-film' }, []);
     const external = el('a', { class: 'clip-player-external yt-external', target: '_blank', rel: 'noopener noreferrer' }, [document.createTextNode('Open on YouTube ↗')]);
     const root = el('aside', { class: 'clip-dock clip-player', role: 'complementary', 'aria-label': 'Clip player' }, [
-      el('div', { class: 'clip-dock-head' }, [titleEl, closeBtn]), wrap, external]);
+      el('div', { class: 'clip-dock-head' }, [titleEl, popBtn, closeBtn]), wrap, barHolder, external]);
+    root.insertBefore(buildClipDockResizer(root), root.firstChild);
     const onKey = (e) => { if (e.key === 'Escape') closeClipPlayer(); };
     document.addEventListener('keydown', onKey);
     document.body.appendChild(root);
     document.body.classList.add('clip-dock-open');
-    clipDock = { root, titleEl, wrap, external, onKey };
+    clipDock = { root, titleEl, wrap, barHolder, external, onKey };
   }
   // A fresh iframe each time: changing src on a playing embed can keep the old clip.
-  clipDock.wrap.innerHTML = '';
-  clipDock.wrap.appendChild(el('iframe', { class: 'clip-player-frame', src: youtubeEmbedUrl(vid, secs), title: title || 'Game video',
-    referrerpolicy: 'strict-origin-when-cross-origin',
-    allow: 'autoplay; encrypted-media; picture-in-picture; fullscreen', allowfullscreen: '' }, []));
+  const start = clipStart != null ? clipStart : secs;
+  mountClip(document, clipDock.wrap, clipDock.barHolder, vid, secs, title, () => !!clipDock);
+  clipCurrent.secs = start;
   clipDock.titleEl.textContent = title || ('Clip at ' + formatTimestamp(secs));
-  clipDock.external.href = youtubeTimestampUrl(vid, secs);
+  clipDock.external.href = youtubeTimestampUrl(vid, start);
   return clipDock;
 }
 function initClipLinks() {
@@ -8842,6 +9320,14 @@ function buildDataEditorSection(viewer, tagOnlyGame) {
   const playerNote = el('p', { class: 'pitch-caption de-player-note' }, []);
   playerNote.style.display = 'none';
   videoCol.appendChild(videoResize);
+  // Film-room controls under the video; "back to the clip" and the loop use
+  // the current event's timestamp, once it has one.
+  const film = buildFilmControls(ytPlayerAdapter(() => player), {
+    clipStart: () => { const r = stepRecord(steps[stepIdx]); return r && r.timestamp != null ? r.timestamp : null; },
+    available: () => section.classList.contains('active') && !!player && playerHost.style.display !== 'none',
+  });
+  const filmHolder = el('div', { class: 'de-film' }, [film.el]);
+  videoCol.appendChild(filmHolder);
   videoCol.appendChild(videoHint);
   videoCol.appendChild(noVideoMsg);
   videoCol.appendChild(playerNote);
@@ -9474,6 +9960,7 @@ function buildDataEditorSection(viewer, tagOnlyGame) {
   // by the owner, a bad link, etc.
   function showPlayerFallback(vid, reason) {
     playerHost.style.display = 'none';
+    filmHolder.style.display = 'none';
     videoHint.style.display = 'none';
     playerHost.innerHTML = '';
     player = null; playerVideoId = null;
@@ -9491,7 +9978,7 @@ function buildDataEditorSection(viewer, tagOnlyGame) {
     const vid = parseYouTubeId(url);
     playerNote.style.display = 'none';
     videoHint.style.display = 'none';
-    if (!vid) { playerHost.style.display = 'none'; noVideoMsg.style.display = ''; player = null; playerVideoId = null; renderPanel(); return; }
+    if (!vid) { playerHost.style.display = 'none'; filmHolder.style.display = 'none'; noVideoMsg.style.display = ''; player = null; playerVideoId = null; renderPanel(); return; }
     noVideoMsg.style.display = 'none';
     // The YouTube player needs a real http(s) origin to validate against.
     // Opened straight off disk (file://) it can't, and rejects the embed with
@@ -9501,6 +9988,7 @@ function buildDataEditorSection(viewer, tagOnlyGame) {
       return;
     }
     playerHost.style.display = '';
+    filmHolder.style.display = '';
     videoHint.style.display = '';
     ensureYouTubeAPI(() => {
       if (player && playerVideoId === vid) return;
