@@ -1244,6 +1244,12 @@ class BrowserTests(unittest.TestCase):
         self.setup_rows(ed)
         ed.click("text=Publish Team Report")
         ed.wait_for_selector(".app-dialog >> text=Team Report published")
+        # The tagging page's player has the film-room controls too.
+        tagp = ctx.new_page()
+        tagp.goto(self.base + "/t/other-club/tag?game=" + pick["game"])
+        tagp.wait_for_selector("#data-editor .de-film .film-bar", state="attached")
+        self.assertEqual(tagp.eval_on_selector_all("#data-editor .film-bar .film-speed", "b => b.length"), 5)
+        tagp.close()
         view = ctx.new_page()
         view.goto(self.base + "/t/other-club/view")
         view.wait_for_selector("#topnav button.tab")
@@ -1263,6 +1269,9 @@ class BrowserTests(unittest.TestCase):
         self.assertEqual(view.get_attribute(head, "aria-sort"), "ascending")
         self.assertEqual(view.text_content(schemes + " >> tbody tr >> nth=-1 >> td >> nth=0"), "Not tagged")
         self.assertEqual(view.eval_on_selector_all("#defense .film-table", "ts => ts.every(t => t.classList.contains('sortable'))"), True)
+        # Field Analysis's video player has the same controls.
+        view.evaluate("() => showView('field-analysis')")
+        self.assertEqual(view.eval_on_selector_all("#field-analysis .film-bar .film-speed", "b => b.length"), 5)
         view.evaluate("() => showView('my-clips')")
         view.wait_for_selector("#my-clips select")
         view.select_option("#my-clips select", pick["thrower"])
@@ -1279,7 +1288,7 @@ class BrowserTests(unittest.TestCase):
         referers = []
         def fake_youtube(route):
             referers.append(route.request.headers.get("referer"))
-            route.fulfill(body="", content_type="text/html")
+            route.fulfill(body=FAKE_EMBED, content_type="text/html")
         view.route("https://www.youtube.com/**", fake_youtube)
         view.click("#clip-test")
         frame = view.wait_for_selector(".clip-dock iframe")
@@ -1296,6 +1305,39 @@ class BrowserTests(unittest.TestCase):
         box = view.query_selector(".clip-dock").bounding_box()
         main = view.query_selector("main").bounding_box()
         self.assertLessEqual(main["x"] + main["width"], box["x"])
+        # Film-room controls under it: buttons and keys drive the player.
+        view.wait_for_selector(".clip-dock .film-bar .film-speed")
+        self.assertEqual(view.eval_on_selector_all(".clip-dock .film-speed", "b => b.map(x => x.textContent)"),
+                         ["0.25×", "0.5×", "1×", "1.5×", "2×"])
+        wait_until(lambda: embed_commands(view) is not None, message="the embed")
+        view.click(".clip-dock .film-speed >> text=0.5×")
+        wait_until(lambda: ["setPlaybackRate", [0.5]] in embed_commands(view), message="speed 0.5")
+        view.keyboard.press("k")
+        wait_until(lambda: ["pauseVideo", []] in embed_commands(view), message="K pauses")
+        view.keyboard.press("Shift+Period")  # ">" : one frame on
+        wait_until(lambda: any(c[0] == "seekTo" and 75.02 < c[1][0] < 75.05 for c in embed_commands(view)), message="a frame step")
+        view.keyboard.press("BracketRight")  # faster: 0.5 -> 1
+        wait_until(lambda: ["setPlaybackRate", [1]] in embed_commands(view), message="] speeds up")
+        # Hold J to rewind: a run of seeks backwards; let go and it stops.
+        view.keyboard.down("j")
+        view.wait_for_timeout(900)
+        view.keyboard.up("j")
+        seeks = [c[1][0] for c in embed_commands(view) if c[0] == "seekTo"]
+        self.assertGreaterEqual(len(seeks), 4)
+        self.assertLess(seeks[-1], 75)
+        n = len(embed_commands(view))
+        view.wait_for_timeout(400)
+        self.assertFalse(any(c[0] == "seekTo" for c in embed_commands(view)[n:]), "rewinding stopped")
+        # Tap L: jump forward 5s. R: back to the clip's start.
+        view.keyboard.press("l")
+        wait_until(lambda: abs(embed_commands(view)[-1][1][0] - (seeks[-1] + 5)) < 0.6 if embed_commands(view)[-1][0] == "seekTo" else False,
+                   message="L jumps 5s")
+        view.keyboard.press("r")
+        wait_until(lambda: ["seekTo", [75, True]] in embed_commands(view), message="R goes back to the clip")
+        # Loop the play.
+        view.click(".clip-dock .film-loop")
+        self.assertIn("on", view.get_attribute(".clip-dock .film-loop", "class"))
+
         # Drag its left edge to resize it; the page follows, and the size sticks.
         handle = view.query_selector(".clip-dock-resizer").bounding_box()
         x, y = handle["x"] + handle["width"] / 2, handle["y"] + handle["height"] / 2
@@ -1312,7 +1354,7 @@ class BrowserTests(unittest.TestCase):
         popup_requests = []
         def popup_youtube(route):
             popup_requests.append((route.request.url, route.request.headers.get("referer")))
-            route.fulfill(body="", content_type="text/html")
+            route.fulfill(body=FAKE_EMBED, content_type="text/html")
         view.context.route("https://www.youtube.com/**", popup_youtube)
         with view.context.expect_page() as popup:
             view.click(".clip-dock-popout")
@@ -1320,6 +1362,10 @@ class BrowserTests(unittest.TestCase):
         frame = win.wait_for_selector("#stage iframe")
         self.assertIn("/embed/abcDEF12345?start=", frame.get_attribute("src"))
         self.assertEqual(win.text_content("#title"), "Pt 3 · Throw")
+        win.wait_for_selector("#film .film-bar .film-speed")
+        wait_until(lambda: embed_commands(win) is not None, message="the pop-out's embed")
+        win.keyboard.press("k")
+        wait_until(lambda: ["pauseVideo", []] in embed_commands(win), message="K pauses in the pop-out")
         # It keeps the report's address, so YouTube gets a Referer (no Error 153).
         wait_until(lambda: any("start=" in u for u, _ in popup_requests), message="the pop-out's embed request")
         self.assertTrue(all(r and r.startswith(self.base) for _, r in popup_requests), popup_requests)
@@ -1377,7 +1423,7 @@ class BrowserTests(unittest.TestCase):
         referers = []
         def fake_youtube(route):
             referers.append(route.request.headers.get("referer"))
-            route.fulfill(body="", content_type="text/html")
+            route.fulfill(body=FAKE_EMBED, content_type="text/html")
         pv.route("https://www.youtube.com/**", fake_youtube)
         pv.evaluate("""() => { const a = document.createElement('a');
             a.href = 'https://www.youtube.com/watch?v=abcDEF12345&t=12s'; a.id = 'clip-test'; a.textContent = '▶ clip';
@@ -1388,6 +1434,39 @@ class BrowserTests(unittest.TestCase):
         self.assertTrue(referers[0] and referers[0].startswith(self.base), referers)
         ctx.close()
         self.assertEqual(self.errors, [])
+
+# A stand-in for YouTube's embed: it speaks the same postMessage protocol as
+# the real player (commands in, "infoDelivery" reports out) and logs every
+# command, so the film-room controls can be checked without YouTube.
+FAKE_EMBED = """<!doctype html><body style="margin:0;background:#222"><script>
+const q = new URLSearchParams(location.search);
+let t = Number(q.get('start') || 0), state = 1, rate = 1;
+window.cmds = [];
+function send() {
+  parent.postMessage(JSON.stringify({ event: 'infoDelivery', info: { currentTime: t, playerState: state, playbackRate: rate,
+    availablePlaybackRates: [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2] } }), '*');
+}
+addEventListener('message', (e) => {
+  let d; try { d = JSON.parse(e.data); } catch (err) { return; }
+  if (d.event === 'command') {
+    window.cmds.push([d.func, d.args]);
+    if (d.func === 'seekTo') t = d.args[0];
+    if (d.func === 'pauseVideo') state = 2;
+    if (d.func === 'playVideo') state = 1;
+    if (d.func === 'setPlaybackRate') rate = d.args[0];
+  }
+  send();
+});
+</script></body>"""
+
+
+def embed_commands(page):
+    """The commands the (fake) embedded player on this page has received."""
+    for f in page.frames:
+        if "/embed/" in f.url:
+            return f.evaluate("() => window.cmds")
+    return None
+
 
 def passes_by_game(statto):
     """{opponent: [{uuid, game}]} for every pass in a .statto export."""
